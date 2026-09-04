@@ -1,0 +1,5 @@
+interface:
+  display_name: "BoxCompute Sandbox"
+  short_description: "Run local AI work safely in BoxCompute"
+  default_prompt: "Use $boxcompute-sandbox to run this task in an isolated BoxCompute sandbox."
+  brand_color: "#CE704C"

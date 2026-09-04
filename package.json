@@ -1,0 +1,48 @@
+{
+  "name": "@boxcompute/cli",
+  "version": "0.1.1",
+  "description": "Connect local AI agents to BoxCompute sandboxes",
+  "keywords": [
+    "boxcompute",
+    "sandbox",
+    "ai-agent",
+    "cli"
+  ],
+  "homepage": "https://app.boxcompute.ai",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/boxcompute/web-agent.git",
+    "directory": "apps/cli"
+  },
+  "bugs": {
+    "url": "https://github.com/boxcompute/web-agent/issues"
+  },
+  "type": "module",
+  "bin": {
+    "bxc": "dist/cli.js",
+    "bcompute": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "skills"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "lint": "oxlint --max-warnings 0 src test",
+    "prepack": "bun run build",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/node": "^26.0.0",
+    "oxlint": "^1.75.0",
+    "typescript": "~6.0.2"
+  }
+}
