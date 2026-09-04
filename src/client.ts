@@ -4,11 +4,17 @@ export type Sandbox = {
   id: string;
   workspaceId: string;
   name: string;
-  state: "not-created" | "cold" | "running";
+  state: "cold" | "running";
   runtimeId: string | null;
   image: string | null;
   createdAt: number;
   lastUsedAt: number | null;
+};
+
+export type Workspace = {
+  id: string;
+  name: string;
+  createdAt: number;
 };
 
 export type Execution = {
@@ -47,26 +53,48 @@ export async function publicRequest<T>(
 export class BoxComputeClient {
   constructor(private readonly connection: Connection, private readonly fetchImpl: typeof fetch = fetch) {}
 
-  private request<T>(pathname: string, init: RequestInit = {}): Promise<T> {
+  private async request<T>(pathname: string, init: RequestInit = {}): Promise<T> {
     const headers = new Headers(init.headers);
     headers.set("authorization", `Bearer ${this.connection.token}`);
-    return publicRequest<T>(this.connection.url, pathname, { ...init, headers }, this.fetchImpl);
+    try {
+      return await publicRequest<T>(
+        this.connection.url,
+        pathname,
+        { ...init, headers },
+        this.fetchImpl,
+      );
+    } catch (error) {
+      const isV2Discovery = pathname === "/api/v2/sandboxes" ||
+        pathname === "/api/v2/workspaces" || pathname === "/api/v2/auth";
+      if (isV2Discovery && error instanceof BoxComputeHttpError && error.status === 404) {
+        throw new BoxComputeHttpError(
+          404,
+          "This BoxCompute server does not support Sandbox API v2 yet. Upgrade the server before this CLI.",
+          error.code,
+        );
+      }
+      throw error;
+    }
   }
 
   async list(): Promise<Sandbox[]> {
-    return (await this.request<{ sandboxes: Sandbox[] }>("/api/v1/sandboxes")).sandboxes;
+    return (await this.request<{ sandboxes: Sandbox[] }>("/api/v2/sandboxes")).sandboxes;
+  }
+
+  async listWorkspaces(): Promise<Workspace[]> {
+    return (await this.request<{ workspaces: Workspace[] }>("/api/v2/workspaces")).workspaces;
   }
 
   async logout(): Promise<void> {
-    await this.request("/api/v1/auth", { method: "DELETE" });
+    await this.request("/api/v2/auth", { method: "DELETE" });
   }
 
   async inspect(id: string): Promise<Sandbox> {
-    return (await this.request<{ sandbox: Sandbox }>(`/api/v1/sandboxes/${encodeURIComponent(id)}`)).sandbox;
+    return (await this.request<{ sandbox: Sandbox }>(`/api/v2/sandboxes/${encodeURIComponent(id)}`)).sandbox;
   }
 
   async start(workspaceId: string): Promise<Sandbox> {
-    return (await this.request<{ sandbox: Sandbox }>("/api/v1/sandboxes", {
+    return (await this.request<{ sandbox: Sandbox }>("/api/v2/sandboxes", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ workspaceId }),
@@ -80,7 +108,7 @@ export class BoxComputeClient {
     maxOutputBytes?: number;
     env?: Record<string, string>;
   }): Promise<Execution> {
-    return (await this.request<{ result: Execution }>(`/api/v1/sandboxes/${encodeURIComponent(id)}/execute`, {
+    return (await this.request<{ result: Execution }>(`/api/v2/sandboxes/${encodeURIComponent(id)}/execute`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(input),
@@ -88,6 +116,6 @@ export class BoxComputeClient {
   }
 
   async delete(id: string): Promise<void> {
-    await this.request(`/api/v1/sandboxes/${encodeURIComponent(id)}`, { method: "DELETE" });
+    await this.request(`/api/v2/sandboxes/${encodeURIComponent(id)}`, { method: "DELETE" });
   }
 }

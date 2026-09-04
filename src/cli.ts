@@ -9,6 +9,7 @@ import {
   publicRequest,
   type Execution,
   type Sandbox,
+  type Workspace,
 } from "./client.js";
 import {
   clearConnection,
@@ -23,6 +24,7 @@ import {
   installSkill,
   readSkill,
   removeSkill,
+  syncManagedSkills,
   type AgentTarget,
   type HarnessDetection,
 } from "./skill.js";
@@ -41,9 +43,10 @@ Commands:
   auth                            [alias: login] Authentication commands
     logout                        Revoke and remove the saved CLI credential
   doctor                          Verify the saved connection
-  sandboxes                       [aliases: list, ls] List workspaces and sandbox state
+  workspaces                      List workspaces that can own sandboxes
+  sandboxes                       [aliases: list, ls] List sandbox instances
   sandbox                         Manage isolated BoxCompute sandboxes
-    start                         Start or resume a workspace sandbox
+    start                         Create and start a workspace sandbox
     status                        Inspect one sandbox
     exec                          Execute a program inside a sandbox
     delete                        [alias: rm] Destroy the runtime; the workspace remains
@@ -70,7 +73,9 @@ Examples:
   $ bxc login
   $ bxc skill detect
   $ bxc skill install
-  $ bxc sandbox exec WORKSPACE_ID -- python -m pytest
+  $ bxc workspaces
+  $ bxc sandbox start WORKSPACE_ID
+  $ bxc sandbox exec SANDBOX_ID -- python -m pytest
 
 Compatibility:
 
@@ -83,7 +88,7 @@ Usage: bxc sandbox <command> [options]
 
 Commands:
 
-  start WORKSPACE_ID              Start or resume a workspace sandbox
+  start WORKSPACE_ID              Create and start a new sandbox instance
   status SANDBOX_ID               Inspect one sandbox
   exec SANDBOX_ID [options] -- PROGRAM [ARG...]
                                   Execute a program inside a sandbox
@@ -148,6 +153,7 @@ export type CliDependencies = {
   installSkill?: typeof installSkill;
   removeSkill?: typeof removeSkill;
   readSkill?: typeof readSkill;
+  syncManagedSkills?: typeof syncManagedSkills;
 };
 
 class UsageError extends Error {
@@ -282,6 +288,10 @@ function sandboxLine(sandbox: Sandbox): string {
   return `${sandbox.id}\t${sandbox.state}\t${sandbox.name}\n`;
 }
 
+function workspaceLine(workspace: Workspace): string {
+  return `${workspace.id}\t${workspace.name}\n`;
+}
+
 function executionOutput(io: Io, json: boolean, sandboxId: string, result: Execution): number {
   if (json) emit(io, true, { sandboxId, ...result }, "");
   else {
@@ -307,6 +317,7 @@ export async function runCli(argv: string[], supplied: CliDependencies = {}): Pr
   const install = supplied.installSkill ?? installSkill;
   const remove = supplied.removeSkill ?? removeSkill;
   const skillText = supplied.readSkill ?? readSkill;
+  const syncSkills = supplied.syncManagedSkills ?? syncManagedSkills;
   const args = [...argv];
   const json = flag(args, "json");
   const versionRequested = args[0] === "version" || anyFlag(args, "--version", "-V", "-v");
@@ -325,6 +336,35 @@ export async function runCli(argv: string[], supplied: CliDependencies = {}): Pr
   if (command === "login") command = "auth";
   if (command === "skills") command = "skill";
   if (command === "list" || command === "ls") command = "sandboxes";
+
+  const canAutoSync = supplied.syncManagedSkills !== undefined || supplied.env === undefined ||
+    Boolean(env.HOME || env.USERPROFILE);
+  if (command !== "skill" && canAutoSync) {
+    try {
+      const synced = await syncSkills(env);
+      const updated = synced.filter((item) => item.status === "updated");
+      const modified = synced.filter((item) => item.status === "modified");
+      if (updated.length) {
+        write(
+          io.stderr,
+          `Updated the BoxCompute skill for ${updated.flatMap((item) => item.agents).join(", ")}. ` +
+          "Start a new agent session to load it.\n",
+        );
+      }
+      for (const item of modified) {
+        write(
+          io.stderr,
+          `Kept locally modified BoxCompute skill at ${item.path}; run ` +
+          "`bxc skill install --force` to replace it.\n",
+        );
+      }
+    } catch (error) {
+      write(
+        io.stderr,
+        `Could not check installed BoxCompute skills: ${(error as Error)?.message ?? String(error)}\n`,
+      );
+    }
+  }
 
   if (command === "logout") {
     if (args.length) throw new UsageError("logout takes no options");
@@ -420,13 +460,19 @@ export async function runCli(argv: string[], supplied: CliDependencies = {}): Pr
   const client = new BoxComputeClient(connection, fetchImpl);
   if (command === "doctor") {
     const sandboxes = await client.list();
-    emit(io, json, { connected: true, url: connection.url, sandboxes: sandboxes.length }, `Connected to ${connection.url} · ${sandboxes.length} workspace${sandboxes.length === 1 ? "" : "s"}\n`);
+    emit(io, json, { connected: true, url: connection.url, sandboxes: sandboxes.length }, `Connected to ${connection.url} · ${sandboxes.length} sandbox${sandboxes.length === 1 ? "" : "es"}\n`);
     return 0;
   }
   if (command === "sandboxes") {
     if (args.length) throw new UsageError("sandboxes takes no options");
     const sandboxes = await client.list();
-    emit(io, json, { sandboxes }, sandboxes.length ? sandboxes.map(sandboxLine).join("") : "No workspaces found. Create one in BoxCompute first.\n");
+    emit(io, json, { sandboxes }, sandboxes.length ? sandboxes.map(sandboxLine).join("") : "No sandboxes found. Start one for a BoxCompute workspace first.\n");
+    return 0;
+  }
+  if (command === "workspaces") {
+    if (args.length) throw new UsageError("workspaces takes no options");
+    const workspaces = await client.listWorkspaces();
+    emit(io, json, { workspaces }, workspaces.length ? workspaces.map(workspaceLine).join("") : "No workspaces found. Create one in BoxCompute first.\n");
     return 0;
   }
   if (command !== "sandbox") throw new UsageError(`Unknown command: ${command}`);

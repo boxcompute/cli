@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
-import { access, cp, mkdir, readFile, readdir, rename, rm, stat } from "node:fs/promises";
+import { access, cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -38,6 +38,9 @@ export type SkillInstallationResult = SkillInstallation & {
 export type SkillRemovalResult = SkillInstallation & {
   status: "removed" | "missing";
 };
+export type SkillSyncResult = SkillInstallation & {
+  status: "updated" | "unchanged" | "modified";
+};
 
 type Locations = { home: string; config: string; codex: string };
 type HarnessDefinition = {
@@ -49,6 +52,20 @@ type HarnessDefinition = {
 };
 
 const sourceSkill = fileURLToPath(new URL("../skills/boxcompute-sandbox", import.meta.url));
+const MANAGED_SKILL_FILE = ".boxcompute-managed.json";
+const MANAGED_BY = "@boxcompute/cli";
+// @boxcompute/cli 0.1.2 predates managed manifests. Recognizing its packaged
+// digest gives existing customers a one-time automatic bridge into managed
+// updates without treating arbitrary skill directories as ours.
+const LEGACY_MANAGED_DIGESTS = new Set([
+  "00d64cd0c71847976baaf6e3d449c0cf1d5fe0d3b3c752b2a05faba906916338",
+]);
+
+type ManagedSkillManifest = {
+  schema: 1;
+  managedBy: typeof MANAGED_BY;
+  contentDigest: string;
+};
 
 function locations(env: NodeJS.ProcessEnv): Locations {
   const home = env.HOME || homedir();
@@ -85,10 +102,11 @@ async function directoryDigest(directory: string): Promise<string> {
   const digest = createHash("sha256");
   const walk = async (current: string, prefix = "") => {
     const entries = await readdir(current, { withFileTypes: true });
-    entries.sort((left, right) => left.name.localeCompare(right.name));
+    entries.sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0);
     for (const entry of entries) {
       const relative = path.posix.join(prefix, entry.name);
       const absolute = path.join(current, entry.name);
+      if (relative === MANAGED_SKILL_FILE) continue;
       if (entry.isDirectory()) await walk(absolute, relative);
       else if (entry.isFile()) {
         digest.update(relative);
@@ -110,6 +128,54 @@ async function matchesPackagedSkill(candidate: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+async function managedManifest(candidate: string): Promise<ManagedSkillManifest | null> {
+  try {
+    const parsed = JSON.parse(
+      await readFile(path.join(candidate, MANAGED_SKILL_FILE), "utf8"),
+    ) as Partial<ManagedSkillManifest>;
+    return parsed.schema === 1 && parsed.managedBy === MANAGED_BY &&
+      typeof parsed.contentDigest === "string"
+      ? parsed as ManagedSkillManifest
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+async function writeManagedManifest(candidate: string): Promise<void> {
+  const manifest: ManagedSkillManifest = {
+    schema: 1,
+    managedBy: MANAGED_BY,
+    contentDigest: await directoryDigest(candidate),
+  };
+  await writeFile(
+    path.join(candidate, MANAGED_SKILL_FILE),
+    `${JSON.stringify(manifest, null, 2)}\n`,
+    { mode: 0o600 },
+  );
+}
+
+async function isUnmodifiedManagedSkill(candidate: string): Promise<boolean> {
+  try {
+    const currentDigest = await directoryDigest(candidate);
+    if (LEGACY_MANAGED_DIGESTS.has(currentDigest)) return true;
+    const manifest = await managedManifest(candidate);
+    return manifest?.contentDigest === currentDigest;
+  } catch {
+    return false;
+  }
+}
+
+async function replaceWithPackagedSkill(candidate: string): Promise<void> {
+  await mkdir(path.dirname(candidate), { recursive: true });
+  const temporary = `${candidate}.tmp-${process.pid}`;
+  await rm(temporary, { recursive: true, force: true });
+  await cp(sourceSkill, temporary, { recursive: true });
+  await writeManagedManifest(temporary);
+  await rm(candidate, { recursive: true, force: true });
+  await rename(temporary, candidate);
 }
 
 async function commandExists(command: string, env: NodeJS.ProcessEnv): Promise<boolean> {
@@ -188,19 +254,43 @@ export async function installSkill(
     if (!await exists(item.path)) return { ...item, status: "installed" };
     if (options.force) return { ...item, status: "updated" };
     if (await matchesPackagedSkill(item.path)) return { ...item, status: "unchanged" };
+    if (await isUnmodifiedManagedSkill(item.path)) return { ...item, status: "updated" };
     throw new Error(`${item.path} already exists and differs; pass --force to replace it`);
   }));
 
   for (const item of planned) {
-    if (item.status === "unchanged") continue;
-    await mkdir(path.dirname(item.path), { recursive: true });
-    const temporary = `${item.path}.tmp-${process.pid}`;
-    await rm(temporary, { recursive: true, force: true });
-    await cp(sourceSkill, temporary, { recursive: true });
-    if (options.force) await rm(item.path, { recursive: true, force: true });
-    await rename(temporary, item.path);
+    if (item.status === "unchanged") await writeManagedManifest(item.path);
+    else await replaceWithPackagedSkill(item.path);
   }
   return planned;
+}
+
+/** Refresh untouched skill copies installed by bxc, preserving local edits. */
+export async function syncManagedSkills(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<SkillSyncResult[]> {
+  const detections = await detectHarnesses(env);
+  const destinations = new Map<string, SkillInstallation>();
+  for (const target of detections.filter((item) => item.installed)) {
+    const current = destinations.get(target.path);
+    if (current) current.agents.push(target.label);
+    else destinations.set(target.path, { agents: [target.label], path: target.path });
+  }
+  const sourceDigest = await directoryDigest(sourceSkill);
+  const results: SkillSyncResult[] = [];
+  for (const item of destinations.values()) {
+    const currentDigest = await directoryDigest(item.path);
+    if (currentDigest === sourceDigest) {
+      await writeManagedManifest(item.path);
+      results.push({ ...item, status: "unchanged" });
+    } else if (await isUnmodifiedManagedSkill(item.path)) {
+      await replaceWithPackagedSkill(item.path);
+      results.push({ ...item, status: "updated" });
+    } else {
+      results.push({ ...item, status: "modified" });
+    }
+  }
+  return results;
 }
 
 export async function removeSkill(
@@ -227,7 +317,9 @@ export async function removeSkill(
   }
   const removals = await Promise.all([...destinations.values()].map(async (item): Promise<SkillRemovalResult> => {
     if (!await exists(item.path)) return { ...item, status: "missing" };
-    if (!options.force && !await matchesPackagedSkill(item.path)) {
+    if (!options.force &&
+      !await matchesPackagedSkill(item.path) &&
+      !await isUnmodifiedManagedSkill(item.path)) {
       throw new Error(`${item.path} differs from the packaged skill; pass --force to remove it`);
     }
     return { ...item, status: "removed" };

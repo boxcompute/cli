@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { detectHarnesses, installSkill, removeSkill } from "../src/skill.js";
+import { detectHarnesses, installSkill, removeSkill, syncManagedSkills } from "../src/skill.js";
 
 const directories: string[] = [];
 afterEach(async () => {
@@ -13,6 +14,28 @@ async function home(): Promise<string> {
   const directory = await mkdtemp(path.join(tmpdir(), "bcompute-harnesses-"));
   directories.push(directory);
   return directory;
+}
+
+async function contentDigest(directory: string): Promise<string> {
+  const digest = createHash("sha256");
+  const walk = async (current: string, prefix = "") => {
+    const entries = await readdir(current, { withFileTypes: true });
+    entries.sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0);
+    for (const entry of entries) {
+      const relative = path.posix.join(prefix, entry.name);
+      if (relative === ".boxcompute-managed.json") continue;
+      const absolute = path.join(current, entry.name);
+      if (entry.isDirectory()) await walk(absolute, relative);
+      else {
+        digest.update(relative);
+        digest.update("\0");
+        digest.update(await readFile(absolute));
+        digest.update("\0");
+      }
+    }
+  };
+  await walk(directory);
+  return digest.digest("hex");
 }
 
 describe("coding harness skill installation", () => {
@@ -40,6 +63,8 @@ describe("coding harness skill installation", () => {
     expect(installed.map((item) => item.status)).toEqual(["installed", "installed"]);
     for (const item of installed) {
       expect(await readFile(path.join(item.path, "SKILL.md"), "utf8")).toContain("name: boxcompute-sandbox");
+      expect(JSON.parse(await readFile(path.join(item.path, ".boxcompute-managed.json"), "utf8")))
+        .toMatchObject({ schema: 1, managedBy: "@boxcompute/cli" });
     }
 
     expect((await installSkill("auto", { env: { HOME: directory, PATH: "" } }))
@@ -68,6 +93,28 @@ describe("coding harness skill installation", () => {
     const [updated] = await installSkill("codex", { env, force: true });
     expect(updated!.status).toBe("updated");
     expect(await readFile(path.join(updated!.path, "SKILL.md"), "utf8")).toContain("name: boxcompute-sandbox");
+  });
+
+  it("automatically refreshes an untouched managed skill and preserves local edits", async () => {
+    const directory = await home();
+    const env = { HOME: directory, PATH: "" };
+    const [installed] = await installSkill("codex", { env });
+    const skillFile = path.join(installed!.path, "SKILL.md");
+    const manifestFile = path.join(installed!.path, ".boxcompute-managed.json");
+
+    await writeFile(skillFile, "previous managed version\n");
+    await writeFile(manifestFile, `${JSON.stringify({
+      schema: 1,
+      managedBy: "@boxcompute/cli",
+      contentDigest: await contentDigest(installed!.path),
+    })}\n`);
+
+    expect((await syncManagedSkills(env))[0]?.status).toBe("updated");
+    expect(await readFile(skillFile, "utf8")).toContain("name: boxcompute-sandbox");
+
+    await writeFile(skillFile, "customer customization\n");
+    expect((await syncManagedSkills(env))[0]?.status).toBe("modified");
+    expect(await readFile(skillFile, "utf8")).toBe("customer customization\n");
   });
 
   it("removes matching skills idempotently and protects modified copies", async () => {

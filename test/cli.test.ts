@@ -75,6 +75,35 @@ describe("bxc CLI", () => {
     })).rejects.toThrow("--yes");
   });
 
+  it("lists parent workspaces before the first sandbox is created", async () => {
+    const io = streams();
+    const connection = { url: "https://app.boxcompute.ai", token: "bc_live_test", tokenFile: "/credential" };
+    expect(await runCli(["workspaces"], {
+      io,
+      env: {},
+      loadConnection: async () => connection,
+      fetch: (async () => new Response(JSON.stringify({
+        workspaces: [{ id: "workspace-one", name: "Demo", createdAt: 1 }],
+      }), { status: 200, headers: { "content-type": "application/json" } })) as unknown as typeof globalThis.fetch,
+    })).toBe(0);
+    expect(output(io.stdout)).toBe("workspace-one\tDemo\n");
+  });
+
+  it("refreshes managed skills on normal commands without requiring a second command", async () => {
+    const io = streams();
+    expect(await runCli(["sandbox"], {
+      io,
+      env: {},
+      syncManagedSkills: async () => [{
+        agents: ["Codex"],
+        path: "/test/.codex/skills/boxcompute-sandbox",
+        status: "updated",
+      }],
+    })).toBe(0);
+    expect(output(io.stderr)).toContain("Updated the BoxCompute skill for Codex");
+    expect(output(io.stdout)).toContain("Usage: bxc sandbox");
+  });
+
   it("shows detected coding harnesses without requiring authentication", async () => {
     const io = streams();
     expect(await runCli(["skill", "detect"], {

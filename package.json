@@ -1,6 +1,6 @@
 {
   "name": "@boxcompute/cli",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Connect local AI agents to BoxCompute sandboxes",
   "keywords": [
     "boxcompute",
@@ -35,6 +35,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "lint": "oxlint --max-warnings 0 src test",
+    "postinstall": "node --eval \"const fs = require('node:fs'); if (fs.existsSync('dist/postinstall.js')) import('./dist/postinstall.js')\"",
     "prepack": "bun run build",
     "test": "bun test",
     "typecheck": "tsc --noEmit -p tsconfig.json"

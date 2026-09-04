@@ -9,20 +9,18 @@ Use `bxc` as the only interface. Authentication belongs to the human: if
 `bxc doctor` says the client is not authenticated, ask the user to run
 `bxc auth`; never request, read, print, or transmit their saved credential.
 
-## Choose the workspace
+## Choose or create a sandbox
 
-Run `bxc --json sandboxes` and select the workspace whose name matches the
-task. Do not assume the first result is correct. If no workspace fits, tell the
-user to create one in BoxCompute; the CLI deliberately does not create account
-workspaces.
-
-Start or resume it with:
+Run `bxc --json workspaces` to choose the parent workspace, including when it
+does not have a sandbox yet. Run `bxc --json sandboxes` to inspect existing
+instances and do not assume the first result is correct. To allocate another
+isolated instance under a workspace, start one with:
 
 ```sh
 bxc --json sandbox start WORKSPACE_ID
 ```
 
-The stable workspace ID is also the sandbox ID used by later commands.
+The returned sandbox `id` is the stable instance ID used by later commands.
 
 ## Execute work
 

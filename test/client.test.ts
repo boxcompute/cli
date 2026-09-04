@@ -19,11 +19,13 @@ describe("BoxCompute client", () => {
       createdAt: 1,
       lastUsedAt: 2,
     };
+    const workspace = { id: "workspace-one", name: "Demo", createdAt: 1 };
     const fetch = (async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input);
       calls.push({ url, init });
-      if (url.endsWith("/api/v1/sandboxes") && init?.method === "POST") return json({ sandbox }, 201);
-      if (url.endsWith("/api/v1/sandboxes")) return json({ sandboxes: [sandbox] });
+      if (url.endsWith("/api/v2/sandboxes") && init?.method === "POST") return json({ sandbox }, 201);
+      if (url.endsWith("/api/v2/sandboxes")) return json({ sandboxes: [sandbox] });
+      if (url.endsWith("/api/v2/workspaces")) return json({ workspaces: [workspace] });
       if (url.endsWith("/execute")) return json({ result: { stdout: "ok\n", stderr: "", exitCode: 0, timedOut: false, stdoutTruncated: false, stderrTruncated: false, wallTimeSeconds: 0.1 } });
       if (init?.method === "DELETE") return new Response(null, { status: 204 });
       return json({ sandbox });
@@ -35,15 +37,28 @@ describe("BoxCompute client", () => {
     }, fetch);
 
     expect(await client.list()).toEqual([sandbox]);
+    expect(await client.listWorkspaces()).toEqual([workspace]);
     expect(await client.start("workspace-one")).toEqual(sandbox);
     expect((await client.execute("workspace-one", { argv: ["printf", "ok\\n"] })).stdout).toBe("ok\n");
     await client.delete("workspace-one");
     await client.logout();
 
-    expect(calls).toHaveLength(5);
+    expect(calls).toHaveLength(6);
     expect(calls.every((call) => new Headers(call.init?.headers).get("authorization") === "Bearer bc_live_secret")).toBe(true);
-    expect(JSON.parse(String(calls[1]!.init?.body))).toEqual({ workspaceId: "workspace-one" });
-    expect(JSON.parse(String(calls[2]!.init?.body))).toEqual({ argv: ["printf", "ok\\n"] });
-    expect(calls[4]!.url).toEndWith("/api/v1/auth");
+    expect(JSON.parse(String(calls[2]!.init?.body))).toEqual({ workspaceId: "workspace-one" });
+    expect(JSON.parse(String(calls[3]!.init?.body))).toEqual({ argv: ["printf", "ok\\n"] });
+    expect(calls[5]!.url).toEndWith("/api/v2/auth");
+  });
+
+  it("explains the server-first requirement when v2 is unavailable", async () => {
+    const client = new BoxComputeClient({
+      url: "https://old.boxcompute.example",
+      token: "bc_live_secret",
+      tokenFile: "/credential",
+    }, (async () => json({ error: "not found" }, 404)) as unknown as typeof globalThis.fetch);
+
+    await expect(client.list()).rejects.toThrow(
+      "Upgrade the server before this CLI",
+    );
   });
 });
