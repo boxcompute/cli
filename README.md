@@ -61,9 +61,11 @@ Deploy the server release with both Sandbox API v1 and v2 before publishing CLI
 contract. After that, clients need only upgrade the package:
 
 ```sh
-npm install --global @boxcompute/cli@latest
+bxc update
 ```
 
-The installation refreshes untouched managed skills before the client's next
-agent session. The new CLI uses v2 for multi-instance sandboxes and gives a
-server-first upgrade message if it reaches an older deployment.
+`bxc up` is the short alias. If the automatic update cannot invoke npm, use
+`npm install --global @boxcompute/cli@latest` manually. Updating preserves the
+saved BoxCompute credential and refreshes untouched managed skills before the
+client's next agent session. The new CLI uses v2 for multi-instance sandboxes
+and gives a server-first upgrade message if it reaches an older deployment.

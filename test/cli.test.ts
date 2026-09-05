@@ -14,6 +14,42 @@ function output(stream: PassThrough): string {
 }
 
 describe("bxc CLI", () => {
+  it("updates to a newer npm release without requiring authentication", async () => {
+    const io = streams();
+    const installed: string[] = [];
+    expect(await runCli(["up"], {
+      io,
+      env: {},
+      fetch: (async (input: string | URL | Request) => {
+        expect(String(input)).toBe("https://registry.npmjs.org/%40boxcompute%2Fcli/latest");
+        return new Response(JSON.stringify({ version: "99.0.0" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }) as typeof globalThis.fetch,
+      installUpdate: async (version) => { installed.push(version); },
+      loadConnection: async () => { throw new Error("should not authenticate"); },
+    })).toBe(0);
+
+    expect(installed).toEqual(["99.0.0"]);
+    expect(output(io.stderr)).toContain("Updating BoxCompute CLI");
+    expect(output(io.stdout)).toContain("Updated BoxCompute CLI to 99.0.0");
+  });
+
+  it("does not reinstall or downgrade an up-to-date CLI", async () => {
+    const io = streams();
+    expect(await runCli(["update"], {
+      io,
+      env: {},
+      fetch: (async () => new Response(JSON.stringify({ version: "0.0.1" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })) as unknown as typeof globalThis.fetch,
+      installUpdate: async () => { throw new Error("should not install"); },
+    })).toBe(0);
+    expect(output(io.stdout)).toContain("already up to date");
+  });
+
   it("opens browser authentication through Windows from WSL", () => {
     expect(browserLaunch("https://app.boxcompute.ai/cli-auth?code=ABCD-EFGH", {
       system: "linux",

@@ -38,6 +38,7 @@ Usage: bxc [options] [command]
 Commands:
 
   version                         Print the version number and exit
+  update                          [alias: up] Update the CLI to the latest npm release
   login                           Log in through BoxCompute in your browser
   logout                          Revoke and remove the saved CLI credential
   auth                            [alias: login] Authentication commands
@@ -71,6 +72,7 @@ Login options:
 Examples:
 
   $ bxc login
+  $ bxc update
   $ bxc skill detect
   $ bxc skill install
   $ bxc workspaces
@@ -145,6 +147,7 @@ export type CliDependencies = {
   now?: () => number;
   sleep?: (milliseconds: number) => Promise<void>;
   openBrowser?: (url: string) => void;
+  installUpdate?: (version: string) => Promise<void>;
   loadConnection?: (env: NodeJS.ProcessEnv) => Promise<Connection>;
   loadSavedUrl?: (env: NodeJS.ProcessEnv) => Promise<string | null>;
   saveConnection?: (url: string, token: string, env: NodeJS.ProcessEnv) => Promise<void>;
@@ -197,6 +200,91 @@ export function openBrowser(url: string, runtime: BrowserRuntime = {}): void {
     // The approval URL is always printed before this best-effort launch. Keep
     // polling so headless shells and restricted WSL interop can authenticate.
   }
+}
+
+function releaseVersion(value: unknown): [number, number, number] | null {
+  if (typeof value !== "string") return null;
+  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(value);
+  if (!match) return null;
+  const parts = match.slice(1).map(Number) as [number, number, number];
+  return parts.every(Number.isSafeInteger) ? parts : null;
+}
+
+function compareReleaseVersions(left: [number, number, number], right: [number, number, number]): number {
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) return left[index] - right[index];
+  }
+  return 0;
+}
+
+async function installCliUpdate(version: string): Promise<void> {
+  const executable = platform() === "win32" ? "npm.cmd" : "npm";
+  await new Promise<void>((resolve, reject) => {
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(executable, ["install", "--global", `@boxcompute/cli@${version}`], {
+        stdio: ["ignore", "ignore", "inherit"],
+      });
+    } catch (error) {
+      reject(error);
+      return;
+    }
+    child.once("error", reject);
+    child.once("exit", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`npm exited with code ${code ?? "unknown"}`));
+    });
+  });
+}
+
+async function updateCli(dependencies: {
+  fetch: typeof fetch;
+  install: (version: string) => Promise<void>;
+  io: Io;
+  json: boolean;
+}): Promise<number> {
+  let response: Response;
+  try {
+    response = await dependencies.fetch("https://registry.npmjs.org/%40boxcompute%2Fcli/latest", {
+      headers: { accept: "application/json" },
+    });
+  } catch (error) {
+    throw new Error(`Could not check npm for updates: ${(error as Error)?.message ?? String(error)}`);
+  }
+  if (!response.ok) throw new Error(`Could not check npm for updates (HTTP ${response.status})`);
+
+  const latest = (await response.json() as { version?: unknown }).version;
+  const currentParts = releaseVersion(CLI_VERSION);
+  const latestParts = releaseVersion(latest);
+  if (!currentParts || !latestParts || typeof latest !== "string") {
+    throw new Error("npm returned an invalid BoxCompute CLI version");
+  }
+  if (compareReleaseVersions(latestParts, currentParts) <= 0) {
+    emit(
+      dependencies.io,
+      dependencies.json,
+      { updated: false, version: CLI_VERSION },
+      `BoxCompute CLI is already up to date (${CLI_VERSION}).\n`,
+    );
+    return 0;
+  }
+
+  write(dependencies.io.stderr, `Updating BoxCompute CLI from ${CLI_VERSION} to ${latest}…\n`);
+  try {
+    await dependencies.install(latest);
+  } catch (error) {
+    throw new Error(
+      `Could not install @boxcompute/cli@${latest}: ${(error as Error)?.message ?? String(error)}. ` +
+      `Run \`npm install --global @boxcompute/cli@${latest}\` manually.`,
+    );
+  }
+  emit(
+    dependencies.io,
+    dependencies.json,
+    { updated: true, previousVersion: CLI_VERSION, version: latest },
+    `Updated BoxCompute CLI to ${latest}.\n`,
+  );
+  return 0;
 }
 
 const delay = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
@@ -339,6 +427,7 @@ export async function runCli(argv: string[], supplied: CliDependencies = {}): Pr
   const now = supplied.now ?? Date.now;
   const sleep = supplied.sleep ?? delay;
   const openBrowserImpl = supplied.openBrowser ?? openBrowser;
+  const installUpdate = supplied.installUpdate ?? installCliUpdate;
   const load = supplied.loadConnection ?? loadConnection;
   const savedUrl = supplied.loadSavedUrl ?? loadSavedUrl;
   const save = supplied.saveConnection ?? saveConnection;
@@ -364,6 +453,7 @@ export async function runCli(argv: string[], supplied: CliDependencies = {}): Pr
 
   let command = args.shift();
   if (command === "login") command = "auth";
+  if (command === "up") command = "update";
   if (command === "skills") command = "skill";
   if (command === "list" || command === "ls") command = "sandboxes";
 
@@ -417,6 +507,11 @@ export async function runCli(argv: string[], supplied: CliDependencies = {}): Pr
       return 0;
     }
     return authenticate(args, { env, io, json, fetch: fetchImpl, now, sleep, openBrowser: openBrowserImpl, loadSavedUrl: savedUrl, saveConnection: save });
+  }
+
+  if (command === "update") {
+    if (args.length) throw new UsageError("update takes no options");
+    return updateCli({ fetch: fetchImpl, install: installUpdate, io, json });
   }
 
   if (command === "skill") {
