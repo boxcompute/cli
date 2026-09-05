@@ -1,6 +1,6 @@
 import { PassThrough } from "node:stream";
 import { describe, expect, it } from "bun:test";
-import { runCli } from "../src/cli.js";
+import { browserLaunch, openBrowser, runCli } from "../src/cli.js";
 
 function streams() {
   return { stdout: new PassThrough(), stderr: new PassThrough() };
@@ -14,6 +14,42 @@ function output(stream: PassThrough): string {
 }
 
 describe("bxc CLI", () => {
+  it("opens browser authentication through Windows from WSL", () => {
+    expect(browserLaunch("https://app.boxcompute.ai/cli-auth?code=ABCD-EFGH", {
+      system: "linux",
+      env: { WSL_DISTRO_NAME: "Ubuntu" },
+      kernelRelease: "5.15.153.1-microsoft-standard-WSL2",
+    })).toEqual({
+      command: "explorer.exe",
+      args: ["https://app.boxcompute.ai/cli-auth?code=ABCD-EFGH"],
+      detached: false,
+    });
+  });
+
+  it("keeps the native browser launchers outside WSL", () => {
+    const url = "https://app.boxcompute.ai/cli-auth?code=ABCD-EFGH";
+    expect(browserLaunch(url, {
+      system: "linux",
+      env: {},
+      kernelRelease: "6.12.0-generic",
+    })).toEqual({ command: "xdg-open", args: [url], detached: true });
+    expect(browserLaunch(url, {
+      system: "darwin",
+      env: {},
+      kernelRelease: "24.6.0",
+    })).toEqual({ command: "open", args: [url], detached: true });
+  });
+
+  it("keeps login usable when the browser process cannot be spawned", () => {
+    const spawnError = Object.assign(new Error("spawn EIO"), { code: "EIO" });
+    expect(() => openBrowser("https://app.boxcompute.ai/cli-auth?code=ABCD-EFGH", {
+      system: "linux",
+      env: { WSL_DISTRO_NAME: "Ubuntu" },
+      kernelRelease: "5.15.153.1-microsoft-standard-WSL2",
+      spawn: (() => { throw spawnError; }) as unknown as typeof import("node:child_process").spawn,
+    })).not.toThrow();
+  });
+
   it("authenticates through browser device approval without printing the credential", async () => {
     const io = streams();
     const opened: string[] = [];

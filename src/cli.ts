@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { readFileSync, realpathSync } from "node:fs";
-import { hostname, platform } from "node:os";
+import { hostname, platform, release } from "node:os";
 import { fileURLToPath } from "node:url";
 import {
   BoxComputeClient,
@@ -160,13 +160,43 @@ class UsageError extends Error {
   constructor(message: string) { super(message); this.name = "UsageError"; }
 }
 
-function browser(url: string): void {
-  const system = platform();
-  const command = system === "darwin" ? "open" : system === "win32" ? "cmd" : "xdg-open";
-  const args = system === "win32" ? ["/c", "start", "", url] : [url];
-  const child = spawn(command, args, { detached: true, stdio: "ignore" });
-  child.on("error", () => undefined);
-  child.unref();
+type BrowserRuntime = {
+  env?: NodeJS.ProcessEnv;
+  kernelRelease?: string;
+  spawn?: typeof spawn;
+  system?: NodeJS.Platform;
+};
+
+export function browserLaunch(
+  url: string,
+  runtime: Pick<BrowserRuntime, "env" | "kernelRelease" | "system"> = {},
+): { command: string; args: string[]; detached: boolean } {
+  const system = runtime.system ?? platform();
+  const env = runtime.env ?? process.env;
+  const kernelRelease = runtime.kernelRelease ?? release();
+  const isWsl = system === "linux" && Boolean(
+    env.WSL_DISTRO_NAME || env.WSL_INTEROP || /microsoft/i.test(kernelRelease),
+  );
+
+  if (isWsl) return { command: "explorer.exe", args: [url], detached: false };
+  if (system === "darwin") return { command: "open", args: [url], detached: true };
+  if (system === "win32") return { command: "cmd", args: ["/c", "start", "", url], detached: true };
+  return { command: "xdg-open", args: [url], detached: true };
+}
+
+export function openBrowser(url: string, runtime: BrowserRuntime = {}): void {
+  const launch = browserLaunch(url, runtime);
+  try {
+    const child = (runtime.spawn ?? spawn)(launch.command, launch.args, {
+      detached: launch.detached,
+      stdio: "ignore",
+    });
+    child.on("error", () => undefined);
+    child.unref();
+  } catch {
+    // The approval URL is always printed before this best-effort launch. Keep
+    // polling so headless shells and restricted WSL interop can authenticate.
+  }
 }
 
 const delay = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
@@ -308,7 +338,7 @@ export async function runCli(argv: string[], supplied: CliDependencies = {}): Pr
   const fetchImpl = supplied.fetch ?? fetch;
   const now = supplied.now ?? Date.now;
   const sleep = supplied.sleep ?? delay;
-  const openBrowser = supplied.openBrowser ?? browser;
+  const openBrowserImpl = supplied.openBrowser ?? openBrowser;
   const load = supplied.loadConnection ?? loadConnection;
   const savedUrl = supplied.loadSavedUrl ?? loadSavedUrl;
   const save = supplied.saveConnection ?? saveConnection;
@@ -386,7 +416,7 @@ export async function runCli(argv: string[], supplied: CliDependencies = {}): Pr
       emit(io, json, { authenticated: false }, "BoxCompute CLI credential revoked and removed.\n");
       return 0;
     }
-    return authenticate(args, { env, io, json, fetch: fetchImpl, now, sleep, openBrowser, loadSavedUrl: savedUrl, saveConnection: save });
+    return authenticate(args, { env, io, json, fetch: fetchImpl, now, sleep, openBrowser: openBrowserImpl, loadSavedUrl: savedUrl, saveConnection: save });
   }
 
   if (command === "skill") {
