@@ -161,6 +161,65 @@ describe("bxc CLI", () => {
     expect(output(io.stdout)).toBe("workspace-one\tDemo\n");
   });
 
+  it("reads retained sandbox logs with filters without starting compute", async () => {
+    const io = streams();
+    const connection = { url: "https://app.boxcompute.ai", token: "bc_live_test", tokenFile: "/credential" };
+    let requested = "";
+    let method: string | undefined;
+    expect(await runCli([
+      "sandbox", "logs", "sandbox-one",
+      "--since", "2026-09-01T00:00:00Z",
+      "--until", "2026-09-07T00:00:00Z",
+      "--stream", "stderr",
+      "--source", "process",
+      "--limit", "25",
+    ], {
+      io,
+      env: {},
+      loadConnection: async () => connection,
+      fetch: (async (input: string | URL | Request, init?: RequestInit) => {
+        requested = String(input);
+        method = init?.method;
+        return new Response(JSON.stringify({ logs: {
+          sandbox_id: "runtime-one",
+          entries: [{
+            timestamp: "2026-09-06T01:02:03.000Z",
+            stream: "stderr",
+            source: "process",
+            message: "database ready",
+            pod_uid: "pod-one",
+            process_id: "proc-one",
+          }],
+          truncated: false,
+          retention_seconds: 2_592_000,
+        } }), { status: 200, headers: { "content-type": "application/json" } });
+      }) as typeof globalThis.fetch,
+    })).toBe(0);
+
+    expect(method).toBeUndefined();
+    expect(requested).toContain("/api/v2/sandboxes/sandbox-one/logs?");
+    expect(requested).toContain("since=2026-09-01T00%3A00%3A00.000Z");
+    expect(requested).toContain("until=2026-09-07T00%3A00%3A00.000Z");
+    expect(requested).toContain("stream=stderr");
+    expect(requested).toContain("source=process");
+    expect(requested).toContain("limit=25");
+    expect(output(io.stdout)).toContain("database ready");
+    expect(output(io.stderr)).toContain("retentionSeconds=2592000");
+  });
+
+  it("rejects invalid sandbox log filters before calling the server", async () => {
+    await expect(runCli(["sandbox", "logs", "sandbox-one", "--stream", "both"], {
+      io: streams(),
+      env: {},
+      loadConnection: async () => ({
+        url: "https://app.boxcompute.ai",
+        token: "bc_live_test",
+        tokenFile: "/credential",
+      }),
+      fetch: (async () => { throw new Error("should not fetch"); }) as unknown as typeof globalThis.fetch,
+    })).rejects.toThrow("--stream must be one of: stdout, stderr");
+  });
+
   it("refreshes managed skills on normal commands without requiring a second command", async () => {
     const io = streams();
     expect(await runCli(["sandbox"], {

@@ -48,6 +48,7 @@ bxc workspaces
 bxc sandboxes
 bxc sandbox start WORKSPACE_ID
 # Use the returned sandbox instance ID for later commands.
+bxc sandbox logs SANDBOX_ID --source execute
 bxc sandbox exec SANDBOX_ID -- python -m pytest
 ```
 

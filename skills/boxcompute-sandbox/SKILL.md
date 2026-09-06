@@ -44,6 +44,11 @@ sandbox unless the user explicitly places those secrets in scope.
 ## Lifecycle and safety
 
 - Inspect uncertain state with `bxc --json sandbox status SANDBOX_ID`.
+- Read runtime output with `bxc sandbox logs SANDBOX_ID`. Add `--json` for
+  structured entries or narrow results with `--since`, `--until`, `--stream`,
+  `--source`, and `--limit`. Log reads do not start stopped compute, and remain
+  available for the provider's nominal 30-day retention period after deletion;
+  storage pressure may shorten that period, so logs are not an archive.
 - Sandboxes persist across commands; do not destroy one merely because the
   current task is finished.
 - `bxc sandbox delete SANDBOX_ID --yes` destroys the remote runtime and is

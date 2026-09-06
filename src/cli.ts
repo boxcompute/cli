@@ -9,6 +9,7 @@ import {
   publicRequest,
   type Execution,
   type Sandbox,
+  type SandboxLogs,
   type Workspace,
 } from "./client.js";
 import {
@@ -49,6 +50,7 @@ Commands:
   sandbox                         Manage isolated BoxCompute sandboxes
     start                         Create and start a workspace sandbox
     status                        Inspect one sandbox
+    logs                          Read current or retained sandbox logs
     exec                          Execute a program inside a sandbox
     delete                        [alias: rm] Destroy the runtime; the workspace remains
   skill                           [alias: skills] Manage coding-harness skills
@@ -77,6 +79,7 @@ Examples:
   $ bxc skill install
   $ bxc workspaces
   $ bxc sandbox start WORKSPACE_ID
+  $ bxc sandbox logs SANDBOX_ID --source execute
   $ bxc sandbox exec SANDBOX_ID -- python -m pytest
 
 Compatibility:
@@ -92,6 +95,7 @@ Commands:
 
   start WORKSPACE_ID              Create and start a new sandbox instance
   status SANDBOX_ID               Inspect one sandbox
+  logs SANDBOX_ID [options]       Read logs without starting the runtime
   exec SANDBOX_ID [options] -- PROGRAM [ARG...]
                                   Execute a program inside a sandbox
   delete SANDBOX_ID --yes         [alias: rm] Destroy the runtime; keep the workspace
@@ -102,6 +106,15 @@ Exec options:
   --env KEY=VALUE                 Set an environment variable; repeatable
   --timeout SECONDS               Command timeout
   --max-output-bytes BYTES        Maximum captured output
+
+Log options:
+
+  --since TIMESTAMP               Include entries at or after an RFC 3339 time
+  --until TIMESTAMP               Include entries before an RFC 3339 time
+  --stream stdout|stderr          Filter by output stream
+  --source workload|execute|process
+                                  Filter by log source
+  --limit ENTRIES                 Maximum entries (default: 1000, max: 5000)
 `;
 
 const skillHelp = `Manage coding-harness skills
@@ -323,6 +336,23 @@ function positive(value: string | undefined, name: string): number | undefined {
   return parsed;
 }
 
+function timestamp(value: string | undefined, name: string): string | undefined {
+  if (value === undefined) return undefined;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.valueOf())) throw new UsageError(`${name} must be an RFC 3339 timestamp`);
+  return parsed.toISOString();
+}
+
+function oneOf<const T extends string>(
+  value: string | undefined,
+  name: string,
+  values: readonly T[],
+): T | undefined {
+  if (value === undefined) return undefined;
+  if (!values.includes(value as T)) throw new UsageError(`${name} must be one of: ${values.join(", ")}`);
+  return value as T;
+}
+
 function environment(tokens: string[]): Record<string, string> | undefined {
   const values: string[] = [];
   for (;;) {
@@ -418,6 +448,24 @@ function executionOutput(io: Io, json: boolean, sandboxId: string, result: Execu
     write(io.stderr, `sandbox=${sandboxId} exitCode=${result.exitCode ?? "null"} timedOut=${result.timedOut}\n`);
   }
   return result.exitCode ?? 1;
+}
+
+function logsOutput(io: Io, json: boolean, logs: SandboxLogs): number {
+  if (json) {
+    emit(io, true, { logs }, "");
+    return 0;
+  }
+  if (!logs.entries.length) write(io.stdout, "No logs found.\n");
+  for (const entry of logs.entries) {
+    const process = entry.process_id ? ` ${entry.process_id}` : "";
+    write(io.stdout, `${entry.timestamp}\t${entry.stream}\t${entry.source}${process}\t${entry.message}\n`);
+  }
+  write(
+    io.stderr,
+    `sandbox=${logs.sandbox_id} entries=${logs.entries.length} retentionSeconds=${logs.retention_seconds}` +
+      `${logs.truncated ? " truncated=true" : ""}\n`,
+  );
+  return 0;
 }
 
 export async function runCli(argv: string[], supplied: CliDependencies = {}): Promise<number> {
@@ -617,6 +665,17 @@ export async function runCli(argv: string[], supplied: CliDependencies = {}): Pr
     const sandbox = await client.inspect(id);
     emit(io, json, { sandbox }, sandboxLine(sandbox));
     return 0;
+  }
+  if (action === "logs") {
+    const since = timestamp(option(args, "since"), "--since");
+    const until = timestamp(option(args, "until"), "--until");
+    const stream = oneOf(option(args, "stream"), "--stream", ["stdout", "stderr"] as const);
+    const source = oneOf(option(args, "source"), "--source", ["workload", "execute", "process"] as const);
+    const limit = positive(option(args, "limit"), "--limit");
+    if (limit !== undefined && limit > 5_000) throw new UsageError("--limit must be 5000 or fewer");
+    if (since && until && since >= until) throw new UsageError("--since must be earlier than --until");
+    if (args.length) throw new UsageError(`Unknown sandbox logs option: ${args[0]}`);
+    return logsOutput(io, json, await client.logs(id, { since, until, stream, source, limit }));
   }
   if (action === "delete") {
     if (!flag(args, "yes") || args.length) throw new UsageError("sandbox delete requires SANDBOX_ID --yes");

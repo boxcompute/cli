@@ -6,6 +6,7 @@ export type Sandbox = {
   name: string;
   state: "cold" | "running";
   runtimeId: string | null;
+  retainedRuntimeId: string | null;
   image: string | null;
   createdAt: number;
   lastUsedAt: number | null;
@@ -25,6 +26,22 @@ export type Execution = {
   stdoutTruncated: boolean;
   stderrTruncated: boolean;
   wallTimeSeconds: number;
+};
+
+export type SandboxLogEntry = {
+  timestamp: string;
+  stream: "stdout" | "stderr";
+  source: "workload" | "execute" | "process";
+  message: string;
+  pod_uid: string;
+  process_id?: string;
+};
+
+export type SandboxLogs = {
+  sandbox_id: string;
+  entries: SandboxLogEntry[];
+  truncated: boolean;
+  retention_seconds: number;
 };
 
 export class BoxComputeHttpError extends Error {
@@ -113,6 +130,25 @@ export class BoxComputeClient {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(input),
     })).result;
+  }
+
+  async logs(id: string, input: {
+    since?: string;
+    until?: string;
+    stream?: "stdout" | "stderr";
+    source?: "workload" | "execute" | "process";
+    limit?: number;
+  } = {}): Promise<SandboxLogs> {
+    const query = new URLSearchParams();
+    if (input.since) query.set("since", input.since);
+    if (input.until) query.set("until", input.until);
+    if (input.stream) query.set("stream", input.stream);
+    if (input.source) query.set("source", input.source);
+    if (input.limit !== undefined) query.set("limit", String(input.limit));
+    const suffix = query.size ? `?${query}` : "";
+    return (await this.request<{ logs: SandboxLogs }>(
+      `/api/v2/sandboxes/${encodeURIComponent(id)}/logs${suffix}`,
+    )).logs;
   }
 
   async delete(id: string): Promise<void> {
