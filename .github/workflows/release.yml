@@ -1,0 +1,184 @@
+name: Publish BoxCompute CLI
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the version on main to npm and GitHub Releases
+        required: true
+        default: false
+        type: boolean
+
+concurrency:
+  group: boxcompute-cli-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate release
+    if: inputs.publish && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out main
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: refs/heads/main
+          persist-credentials: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Install trusted-publishing-compatible npm
+        run: npm install --global npm@11.15.0
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.3.14
+
+      - name: Build and test
+        run: |
+          bun install --frozen-lockfile
+          bun run typecheck
+          bun test
+          bun run lint
+          bun run build
+          npm pack --dry-run
+
+      - name: Validate release notes and production authentication
+        run: |
+          version="$(node --print "require('./package.json').version")"
+          node scripts/release-notes.mjs "$version" >/dev/null
+          response="$(curl --fail --silent --show-error \
+            --retry 5 --retry-all-errors --retry-delay 3 \
+            --request POST \
+            --header 'content-type: application/json' \
+            --data '{"clientName":"GitHub Actions release check"}' \
+            https://app.boxcompute.ai/api/cli-auth/device)"
+          jq -e '
+            (.deviceCode | startswith("bcd_")) and
+            (.userCode | test("^[A-Z0-9]{4}-[A-Z0-9]{4}$")) and
+            (.verificationUri == "https://app.boxcompute.ai/cli-auth")
+          ' >/dev/null <<<"$response"
+
+  publish:
+    name: Publish release
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - name: Check out main
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: refs/heads/main
+          persist-credentials: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Install trusted-publishing-compatible npm
+        run: npm install --global npm@11.15.0
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.3.14
+
+      - name: Build package
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+
+      - name: Read release identity
+        id: release
+        run: |
+          name="$(node --print "require('./package.json').name")"
+          version="$(node --print "require('./package.json').version")"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+
+      - name: Check npm release state
+        id: npm
+        env:
+          PACKAGE_NAME: ${{ steps.release.outputs.name }}
+          PACKAGE_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          published="$(npm view "$PACKAGE_NAME@$PACKAGE_VERSION" version 2>/dev/null || true)"
+          if [ -z "$published" ]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git_head="$(npm view "$PACKAGE_NAME@$PACKAGE_VERSION" gitHead 2>/dev/null || true)"
+          if [ "$published" != "$PACKAGE_VERSION" ] || [ "$git_head" != "$GITHUB_SHA" ]; then
+            echo "${PACKAGE_NAME}@${PACKAGE_VERSION} already exists from commit ${git_head:-unknown}" >&2
+            exit 1
+          fi
+          echo "Package already matches this commit; continuing release recovery"
+          echo "publish=false" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare reviewed draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          PACKAGE_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            target="$(gh release view "$RELEASE_TAG" --json targetCommitish --jq .targetCommitish)"
+            if [ "$target" != "$GITHUB_SHA" ]; then
+              echo "${RELEASE_TAG} already targets ${target}, not ${GITHUB_SHA}" >&2
+              exit 1
+            fi
+            exit 0
+          fi
+          node scripts/release-notes.mjs "$PACKAGE_VERSION" > "$RUNNER_TEMP/release-notes.md"
+          printf '\nThrough: %s\n' "$GITHUB_SHA" >> "$RUNNER_TEMP/release-notes.md"
+          gh release create "$RELEASE_TAG" \
+            --draft \
+            --target "$GITHUB_SHA" \
+            --title "$RELEASE_TAG" \
+            --notes-file "$RUNNER_TEMP/release-notes.md"
+
+      - name: Publish CLI to npm
+        if: steps.npm.outputs.publish == 'true'
+        run: npm publish --access public
+
+      - name: Verify npm release
+        env:
+          PACKAGE_NAME: ${{ steps.release.outputs.name }}
+          PACKAGE_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          for _ in $(seq 1 12); do
+            published="$(npm view "$PACKAGE_NAME" version 2>/dev/null || true)"
+            if [ "$published" = "$PACKAGE_VERSION" ]; then
+              echo "Published $PACKAGE_NAME@$PACKAGE_VERSION"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "$PACKAGE_NAME@$PACKAGE_VERSION was not visible after publication" >&2
+          exit 1
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          draft="$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)"
+          if [ "$draft" = "true" ]; then
+            gh release edit "$RELEASE_TAG" --draft=false --latest
+          fi

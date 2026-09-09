@@ -207,6 +207,37 @@ describe("bxc CLI", () => {
     expect(output(io.stderr)).toContain("retentionSeconds=2592000");
   });
 
+  it("passes CLI-looking program arguments through the exec boundary", async () => {
+    const io = streams();
+    const connection = { url: "https://app.boxcompute.ai", token: "bc_live_test", tokenFile: "/credential" };
+    let body: unknown;
+    expect(await runCli([
+      "--json", "sandbox", "exec", "sandbox-one", "--", "python", "--version", "--json",
+    ], {
+      io,
+      env: {},
+      loadConnection: async () => connection,
+      fetch: (async (_input: string | URL | Request, init?: RequestInit) => {
+        body = JSON.parse(String(init?.body));
+        return new Response(JSON.stringify({ result: {
+          stdout: "Python 3.14.4\n",
+          stderr: "",
+          exitCode: 0,
+          timedOut: false,
+          stdoutTruncated: false,
+          stderrTruncated: false,
+          wallTimeSeconds: 0.01,
+        } }), { status: 200, headers: { "content-type": "application/json" } });
+      }) as typeof globalThis.fetch,
+    })).toBe(0);
+
+    expect(body).toEqual({ argv: ["python", "--version", "--json"] });
+    expect(JSON.parse(output(io.stdout))).toMatchObject({
+      sandboxId: "sandbox-one",
+      stdout: "Python 3.14.4\n",
+    });
+  });
+
   it("rejects invalid sandbox log filters before calling the server", async () => {
     await expect(runCli(["sandbox", "logs", "sandbox-one", "--stream", "both"], {
       io: streams(),

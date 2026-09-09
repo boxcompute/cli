@@ -1,0 +1,100 @@
+name: Validate CLI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate CLI package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Require a release version for distributable changes
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if git diff --quiet "$BASE_SHA" HEAD -- \
+            src skills README.md package.json tsconfig.build.json; then
+            echo "No distributable CLI change; version check skipped"
+            exit 0
+          fi
+
+          package_name="$(node --print "require('./package.json').name")"
+          package_version="$(node --print "require('./package.json').version")"
+          base_version="$(git show "$BASE_SHA:package.json" | node --input-type=commonjs --eval \
+            "let data=''; process.stdin.on('data', chunk => data += chunk).on('end', () => process.stdout.write(JSON.parse(data).version))")"
+          if [ "$package_version" = "$base_version" ]; then
+            echo "::error file=package.json::Distributable files changed without a version bump from ${base_version}."
+            exit 1
+          fi
+          if npm view "$package_name@$package_version" version >/dev/null 2>&1; then
+            echo "::error file=package.json::${package_name}@${package_version} already exists on npm."
+            exit 1
+          fi
+          node scripts/release-notes.mjs "$package_version" >/dev/null
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.3.14
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Validate source and package
+        run: |
+          bun run typecheck
+          bun test
+          bun run lint
+          bun run build
+          npm pack --dry-run
+
+  compatibility:
+    name: Node ${{ matrix.node }} package smoke test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 22, 24]
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+          package-manager-cache: false
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.3.14
+
+      - name: Build and smoke-test the packed CLI
+        run: |
+          bun install --frozen-lockfile
+          package_file="$(npm pack --silent)"
+          npm install --global --ignore-scripts --prefix "$RUNNER_TEMP/boxcompute-cli" "./$package_file"
+          actual="$($RUNNER_TEMP/boxcompute-cli/bin/bxc --version)"
+          expected="$(node --print "require('./package.json').version")"
+          test "$actual" = "$expected"

@@ -322,8 +322,10 @@ function flag(tokens: string[], name: string): boolean {
   return true;
 }
 
-function anyFlag(tokens: string[], ...names: string[]): boolean {
-  const index = tokens.findIndex((token) => names.includes(token));
+function globalFlag(tokens: string[], ...names: string[]): boolean {
+  const separator = tokens.indexOf("--");
+  const boundary = separator < 0 ? tokens.length : separator;
+  const index = tokens.findIndex((token, position) => position < boundary && names.includes(token));
   if (index < 0) return false;
   tokens.splice(index, 1);
   return true;
@@ -486,13 +488,13 @@ export async function runCli(argv: string[], supplied: CliDependencies = {}): Pr
   const skillText = supplied.readSkill ?? readSkill;
   const syncSkills = supplied.syncManagedSkills ?? syncManagedSkills;
   const args = [...argv];
-  const json = flag(args, "json");
-  const versionRequested = args[0] === "version" || anyFlag(args, "--version", "-V", "-v");
+  const json = globalFlag(args, "--json");
+  const versionRequested = args[0] === "version" || globalFlag(args, "--version", "-V", "-v");
   if (versionRequested) {
     emit(io, json, { version: CLI_VERSION }, `${CLI_VERSION}\n`);
     return 0;
   }
-  const helpRequested = anyFlag(args, "--help", "-h");
+  const helpRequested = globalFlag(args, "--help", "-h");
   if (!args.length || args[0] === "help" || helpRequested) {
     const helpTarget = args[0] === "help" ? args[1] : args[0];
     write(io.stdout, helpFor(helpTarget));

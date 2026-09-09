@@ -70,3 +70,30 @@ bxc update
 saved BoxCompute credential and refreshes untouched managed skills before the
 client's next agent session. The new CLI uses v2 for multi-instance sandboxes
 and gives a server-first upgrade message if it reaches an older deployment.
+
+## Development
+
+```sh
+bun install --frozen-lockfile
+bun run typecheck
+bun test
+bun run lint
+bun run build
+```
+
+The application-side authentication and customer Sandbox API implementations
+live in the private `boxcompute/web-agent` repository. Changes to either side of
+that contract must remain backward compatible during rollout: deploy the server
+first, then publish the CLI.
+
+## Releases
+
+Every user-visible change is recorded in [CHANGELOG.md](CHANGELOG.md). Releases
+use semantic `vMAJOR.MINOR.PATCH` tags and are published from `main` by the
+protected `Publish BoxCompute CLI` workflow. npm trusted publishing supplies a
+short-lived release credential; the repository stores no npm token.
+
+## License
+
+Copyright © 2026 BoxCompute. All rights reserved. The source is publicly
+visible, but it is not offered under an open-source license.
