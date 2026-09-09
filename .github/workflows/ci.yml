@@ -29,26 +29,7 @@ jobs:
         if: github.event_name == 'pull_request'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: |
-          if git diff --quiet "$BASE_SHA" HEAD -- \
-            src skills README.md package.json tsconfig.build.json; then
-            echo "No distributable CLI change; version check skipped"
-            exit 0
-          fi
-
-          package_name="$(node --print "require('./package.json').name")"
-          package_version="$(node --print "require('./package.json').version")"
-          base_version="$(git show "$BASE_SHA:package.json" | node --input-type=commonjs --eval \
-            "let data=''; process.stdin.on('data', chunk => data += chunk).on('end', () => process.stdout.write(JSON.parse(data).version))")"
-          if [ "$package_version" = "$base_version" ]; then
-            echo "::error file=package.json::Distributable files changed without a version bump from ${base_version}."
-            exit 1
-          fi
-          if npm view "$package_name@$package_version" version >/dev/null 2>&1; then
-            echo "::error file=package.json::${package_name}@${package_version} already exists on npm."
-            exit 1
-          fi
-          node scripts/release-notes.mjs "$package_version" >/dev/null
+        run: node scripts/validate-release-change.mjs "$BASE_SHA"
 
       - name: Install Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
