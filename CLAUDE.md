@@ -6,12 +6,14 @@ This repository owns the public `@boxcompute/cli` npm package and its bundled
 
 ## Toolchain
 
-Use the repository-pinned Bun version, not npm, for development:
+Use the repository-pinned Bun version, not npm, for JavaScript development.
+Packaging the Tailcat helper also requires Go 1.27.1:
 
 ```bash
 bun install --frozen-lockfile
 bun run typecheck
 bun test
+bun run test:native
 bun run lint
 bun run build
 npm pack --dry-run

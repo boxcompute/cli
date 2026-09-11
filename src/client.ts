@@ -44,6 +44,22 @@ export type SandboxLogs = {
   retention_seconds: number;
 };
 
+export type CooperativeConnectionKeys = {
+  client_key: string;
+  ssh_key: string;
+  recipient_key: string;
+};
+
+export type CooperativeConnectionEnvelope = {
+  endpoint_id: string;
+  expires_at: number;
+  sealed: string;
+};
+
+const sandboxSlotPattern = /^sbx_[a-zA-Z0-9_-]+$/;
+const endpointPattern = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
+const cooperativeUnavailable = () => new Error("Cooperative SSH is unavailable; an unacknowledged enrollment may remain until its lease expires.");
+
 export class BoxComputeHttpError extends Error {
   constructor(readonly status: number, message: string, readonly code?: string) {
     super(message);
@@ -130,6 +146,116 @@ export class BoxComputeClient {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(input),
     })).result;
+  }
+
+  private async cooperativeRequest(
+    id: string,
+    action: "activate" | "reconnect" | "revoke",
+    keys?: CooperativeConnectionKeys,
+    endpointId?: string,
+  ): Promise<unknown> {
+    try {
+      const origin = new URL(this.connection.url);
+      if (
+        origin.protocol !== "https:" ||
+        origin.username ||
+        origin.password ||
+        (origin.pathname !== "/" && origin.pathname !== "") ||
+        origin.search ||
+        origin.hash
+      ) throw cooperativeUnavailable();
+      if (!sandboxSlotPattern.test(id)) throw cooperativeUnavailable();
+      if (action !== "activate" && !endpointPattern.test(endpointId ?? "")) throw cooperativeUnavailable();
+      if (action !== "revoke" && (
+        !keys ||
+        Object.keys(keys).sort().join() !== "client_key,recipient_key,ssh_key" ||
+        !/^nodekey:(?!0{64}$)[a-f0-9]{64}$/.test(keys.client_key) ||
+        !/^ssh-ed25519 [A-Za-z0-9+/]{68}$/.test(keys.ssh_key) ||
+        !/^[A-Za-z0-9+/]{43}=$/.test(keys.recipient_key)
+      )) throw cooperativeUnavailable();
+
+      const base = `/api/v2/sandboxes/${encodeURIComponent(id)}/cooperative-connection`;
+      const pathname = action === "activate" ? base : `${base}/${encodeURIComponent(endpointId!)}`;
+      const signal = AbortSignal.timeout(10_000);
+      const headers = new Headers({ authorization: `Bearer ${this.connection.token}` });
+      if (keys) headers.set("content-type", "application/json");
+      const response = await this.fetchImpl(new URL(pathname, `${origin.origin}/`), {
+        method: action === "revoke" ? "DELETE" : "POST",
+        headers,
+        redirect: "error",
+        signal,
+        ...(keys ? { body: JSON.stringify(keys) } : {}),
+      });
+      if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined);
+        throw cooperativeUnavailable();
+      }
+      const reader = response.body?.getReader();
+      if (!reader) throw cooperativeUnavailable();
+      const chunks: Uint8Array[] = [];
+      let size = 0;
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          size += value.byteLength;
+          if (size > 16_384) throw cooperativeUnavailable();
+          chunks.push(value);
+        }
+        return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks)));
+      } finally {
+        await reader.cancel().catch(() => undefined);
+      }
+    } catch {
+      throw cooperativeUnavailable();
+    }
+  }
+
+  private cooperativeEnvelope(value: unknown, endpointId?: string): CooperativeConnectionEnvelope {
+    const envelope = value as CooperativeConnectionEnvelope;
+    const now = Math.floor(Date.now() / 1000);
+    if (
+      !envelope ||
+      Object.keys(envelope).sort().join() !== "endpoint_id,expires_at,sealed" ||
+      !endpointPattern.test(envelope.endpoint_id) ||
+      (endpointId !== undefined && envelope.endpoint_id !== endpointId) ||
+      !Number.isSafeInteger(envelope.expires_at) ||
+      envelope.expires_at <= now ||
+      envelope.expires_at > now + 30 ||
+      typeof envelope.sealed !== "string" ||
+      envelope.sealed.length < 80 ||
+      envelope.sealed.length > 16_000 ||
+      Buffer.from(envelope.sealed, "base64").toString("base64") !== envelope.sealed
+    ) throw cooperativeUnavailable();
+    return envelope;
+  }
+
+  async activateCooperativeConnection(id: string, keys: CooperativeConnectionKeys): Promise<CooperativeConnectionEnvelope> {
+    return this.cooperativeEnvelope(await this.cooperativeRequest(id, "activate", keys));
+  }
+
+  async reconnectCooperativeConnection(
+    id: string,
+    endpointId: string,
+    keys: CooperativeConnectionKeys,
+  ): Promise<CooperativeConnectionEnvelope> {
+    return this.cooperativeEnvelope(
+      await this.cooperativeRequest(id, "reconnect", keys, endpointId),
+      endpointId,
+    );
+  }
+
+  async revokeCooperativeConnection(id: string, endpointId: string): Promise<void> {
+    const response = await this.cooperativeRequest(id, "revoke", undefined, endpointId) as {
+      endpoint_id?: unknown;
+      cleanup?: unknown;
+    };
+    if (
+      !response ||
+      Object.keys(response).sort().join() !== "cleanup,endpoint_id" ||
+      response.endpoint_id !== endpointId ||
+      response.cleanup !== "unconfirmed"
+    ) throw cooperativeUnavailable();
   }
 
   async logs(id: string, input: {

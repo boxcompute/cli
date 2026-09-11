@@ -41,6 +41,22 @@ is task evidence, not a reason to repeat blindly: read stdout/stderr, correct
 the cause, and then run the revised command. Never send local secrets into the
 sandbox unless the user explicitly places those secrets in scope.
 
+## Experimental SSH transport
+
+Use `bxc sandbox exec` for normal agent work. Only use the experimental SSH
+transport when the user explicitly asks for SSH or for testing the Tailcat
+connection path, and only with an already running operator-enabled sandbox:
+
+```sh
+BOXCOMPUTE_ENABLE_SSH=1 bxc sandbox ssh SANDBOX_ID
+```
+
+The non-PTY lease lasts at most 30 seconds and cleanup is best-effort. Do not
+present it as a persistent shell, arbitrary tunnel, or proof of immediate
+server-side revocation. If the CLI reports an uncertain revoke, preserve its
+endpoint ID and use the printed `--revoke` command only after inspecting owner
+state. Never retry activation automatically.
+
 ## Lifecycle and safety
 
 - Inspect uncertain state with `bxc --json sandbox status SANDBOX_ID`.

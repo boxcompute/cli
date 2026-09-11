@@ -2,6 +2,7 @@
 import { spawn } from "node:child_process";
 import { readFileSync, realpathSync } from "node:fs";
 import { hostname, platform, release } from "node:os";
+import type { Readable, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import {
   BoxComputeClient,
@@ -29,6 +30,8 @@ import {
   type AgentTarget,
   type HarnessDetection,
 } from "./skill.js";
+import { runProxy } from "./proxy.js";
+import { runSsh } from "./ssh.js";
 
 const DEFAULT_URL = "https://app.boxcompute.ai";
 const CLI_VERSION = (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version;
@@ -52,6 +55,7 @@ Commands:
     status                        Inspect one sandbox
     logs                          Read current or retained sandbox logs
     exec                          Execute a program inside a sandbox
+    ssh                           Open experimental lease-limited SSH
     delete                        [alias: rm] Destroy the runtime; the workspace remains
   skill                           [alias: skills] Manage coding-harness skills
     detect                        Detect compatible coding harnesses
@@ -81,6 +85,7 @@ Examples:
   $ bxc sandbox start WORKSPACE_ID
   $ bxc sandbox logs SANDBOX_ID --source execute
   $ bxc sandbox exec SANDBOX_ID -- python -m pytest
+  $ BOXCOMPUTE_ENABLE_SSH=1 bxc sandbox ssh SANDBOX_ID
 
 Compatibility:
 
@@ -98,7 +103,16 @@ Commands:
   logs SANDBOX_ID [options]       Read logs without starting the runtime
   exec SANDBOX_ID [options] -- PROGRAM [ARG...]
                                   Execute a program inside a sandbox
+  ssh SANDBOX_ID [options]        Open experimental non-PTY SSH for up to 30 seconds
   delete SANDBOX_ID --yes         [alias: rm] Destroy the runtime; keep the workspace
+
+SSH options:
+
+  --reconnect                     Verify one same-envelope reconnect after SSH exits
+  --revoke ENDPOINT_ID            Request best-effort cleanup without opening SSH
+
+  Requires BOXCOMPUTE_ENABLE_SSH=1. Available only for operator-enabled
+  sandboxes on Linux and macOS (x64 or arm64). Cleanup remains unconfirmed.
 
 Exec options:
 
@@ -143,7 +157,7 @@ Supported harnesses:
   goose, pi, windsurf, and the shared agents directory
 `;
 
-type Io = { stdout: NodeJS.WritableStream; stderr: NodeJS.WritableStream };
+type Io = { stdin?: Readable; stdout: Writable; stderr: Writable };
 type DeviceAuthorization = {
   deviceCode: string;
   userCode: string;
@@ -170,6 +184,8 @@ export type CliDependencies = {
   removeSkill?: typeof removeSkill;
   readSkill?: typeof readSkill;
   syncManagedSkills?: typeof syncManagedSkills;
+  proxy?: typeof runProxy;
+  ssh?: typeof runSsh;
 };
 
 class UsageError extends Error {
@@ -472,7 +488,7 @@ function logsOutput(io: Io, json: boolean, logs: SandboxLogs): number {
 
 export async function runCli(argv: string[], supplied: CliDependencies = {}): Promise<number> {
   const env = supplied.env ?? process.env;
-  const io = supplied.io ?? { stdout: process.stdout, stderr: process.stderr };
+  const io: Io = supplied.io ?? { stdin: process.stdin, stdout: process.stdout, stderr: process.stderr };
   const fetchImpl = supplied.fetch ?? fetch;
   const now = supplied.now ?? Date.now;
   const sleep = supplied.sleep ?? delay;
@@ -487,6 +503,9 @@ export async function runCli(argv: string[], supplied: CliDependencies = {}): Pr
   const remove = supplied.removeSkill ?? removeSkill;
   const skillText = supplied.readSkill ?? readSkill;
   const syncSkills = supplied.syncManagedSkills ?? syncManagedSkills;
+  const proxy = supplied.proxy ?? runProxy;
+  const ssh = supplied.ssh ?? runSsh;
+  const streamIo = { stdin: io.stdin ?? process.stdin, stdout: io.stdout, stderr: io.stderr };
   const args = [...argv];
   const json = globalFlag(args, "--json");
   const versionRequested = args[0] === "version" || globalFlag(args, "--version", "-V", "-v");
@@ -506,6 +525,11 @@ export async function runCli(argv: string[], supplied: CliDependencies = {}): Pr
   if (command === "up") command = "update";
   if (command === "skills") command = "skill";
   if (command === "list" || command === "ls") command = "sandboxes";
+
+  if (command === "proxy") {
+    if (json || args.length !== 1) throw new UsageError("proxy requires one private configuration file and no --json option");
+    return proxy(args[0]!, streamIo);
+  }
 
   const canAutoSync = supplied.syncManagedSkills !== undefined || supplied.env === undefined ||
     Boolean(env.HOME || env.USERPROFILE);
@@ -678,6 +702,17 @@ export async function runCli(argv: string[], supplied: CliDependencies = {}): Pr
     if (since && until && since >= until) throw new UsageError("--since must be earlier than --until");
     if (args.length) throw new UsageError(`Unknown sandbox logs option: ${args[0]}`);
     return logsOutput(io, json, await client.logs(id, { since, until, stream, source, limit }));
+  }
+  if (action === "ssh") {
+    if (json) throw new UsageError("sandbox ssh carries raw bytes and does not support --json");
+    if (env.BOXCOMPUTE_ENABLE_SSH !== "1") {
+      throw new UsageError("sandbox ssh is experimental; set BOXCOMPUTE_ENABLE_SSH=1 to enable it");
+    }
+    const reconnect = flag(args, "reconnect");
+    const revoke = option(args, "revoke");
+    if (reconnect && revoke) throw new UsageError("--reconnect and --revoke cannot be combined");
+    if (args.length) throw new UsageError(`Unknown sandbox ssh option: ${args[0]}`);
+    return ssh(id, { reconnect, revoke }, client, env, streamIo);
   }
   if (action === "delete") {
     if (!flag(args, "yes") || args.length) throw new UsageError("sandbox delete requires SANDBOX_ID --yes");

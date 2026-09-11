@@ -238,6 +238,42 @@ describe("bxc CLI", () => {
     });
   });
 
+  it("dispatches experimental SSH only after explicit opt-in", async () => {
+    const connection = { url: "https://app.boxcompute.ai", token: "bc_live_test", tokenFile: "/credential" };
+    const invoked: Array<{ id: string; action: unknown }> = [];
+    expect(await runCli(["sandbox", "ssh", "sbx_demo", "--reconnect"], {
+      io: streams(),
+      env: { BOXCOMPUTE_ENABLE_SSH: "1" },
+      loadConnection: async () => connection,
+      ssh: async (id, action) => {
+        invoked.push({ id, action });
+        return 0;
+      },
+    })).toBe(0);
+    expect(invoked).toEqual([{ id: "sbx_demo", action: { reconnect: true, revoke: undefined } }]);
+
+    await expect(runCli(["sandbox", "ssh", "sbx_demo"], {
+      io: streams(),
+      env: {},
+      loadConnection: async () => connection,
+      ssh: async () => 0,
+    })).rejects.toThrow("BOXCOMPUTE_ENABLE_SSH=1");
+  });
+
+  it("runs the private proxy helper without loading API credentials", async () => {
+    const invoked: string[] = [];
+    expect(await runCli(["proxy", "/private/config.json"], {
+      io: streams(),
+      env: {},
+      loadConnection: async () => { throw new Error("should not authenticate"); },
+      proxy: async (path) => {
+        invoked.push(path);
+        return 0;
+      },
+    })).toBe(0);
+    expect(invoked).toEqual(["/private/config.json"]);
+  });
+
   it("rejects invalid sandbox log filters before calling the server", async () => {
     await expect(runCli(["sandbox", "logs", "sandbox-one", "--stream", "both"], {
       io: streams(),
