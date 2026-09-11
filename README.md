@@ -52,6 +52,22 @@ bxc sandbox logs SANDBOX_ID --source execute
 bxc sandbox exec SANDBOX_ID -- python -m pytest
 ```
 
+### Experimental Tailcat SSH
+
+Operator-enabled sandboxes can accept a short-lived, non-PTY SSH connection
+without exposing an SSH port publicly:
+
+```sh
+BOXCOMPUTE_ENABLE_SSH=1 bxc sandbox ssh SANDBOX_ID
+```
+
+This feature currently supports Linux and macOS on x64 and arm64. Each grant
+lasts at most 30 seconds, uses ephemeral client keys and a pinned SSH host key,
+and requests best-effort cleanup when the client exits. It does not provision
+or start a sandbox, retry mutations, provide arbitrary port forwarding, or
+guarantee immediate cleanup. If revocation is uncertain, the CLI prints the
+exact `--revoke` command; the server-side lease still expires naturally.
+
 Run `bxc` or `bxc --help` for the complete command reference. The previous
 `bcompute` executable remains available as a compatibility alias.
 
@@ -77,9 +93,14 @@ and gives a server-first upgrade message if it reaches an older deployment.
 bun install --frozen-lockfile
 bun run typecheck
 bun test
+bun run test:native
 bun run lint
 bun run build
+npm pack --dry-run
 ```
+
+Building the npm package requires Go 1.27.1 to compile its four client-only
+Tailcat proxy binaries. End users do not need Go installed.
 
 The application-side authentication and customer Sandbox API implementations
 live in the private `boxcompute/web-agent` repository. Changes to either side of

@@ -86,4 +86,59 @@ describe("BoxCompute client", () => {
       "Upgrade the server before this CLI",
     );
   });
+
+  it("uses the bounded public cooperative routes without retrying mutations", async () => {
+    const endpointId = "12345678-1234-4234-8234-123456789abc";
+    const envelope = {
+      endpoint_id: endpointId,
+      expires_at: Math.floor(Date.now() / 1_000) + 25,
+      sealed: Buffer.alloc(96, 3).toString("base64"),
+    };
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      return json(init?.method === "DELETE"
+        ? { endpoint_id: endpointId, cleanup: "unconfirmed" }
+        : envelope, init?.method === "DELETE" ? 202 : init?.method === "POST" ? 201 : 200);
+    }) as typeof globalThis.fetch;
+    const client = new BoxComputeClient({
+      url: "https://app.boxcompute.ai",
+      token: "bc_live_secret",
+      tokenFile: "/credential",
+    }, fetch);
+    const keys = {
+      client_key: `nodekey:${"a".repeat(64)}`,
+      ssh_key: `ssh-ed25519 ${"A".repeat(68)}`,
+      recipient_key: Buffer.alloc(32, 2).toString("base64"),
+    };
+
+    expect(await client.activateCooperativeConnection("sbx_demo", keys)).toEqual(envelope);
+    expect(await client.reconnectCooperativeConnection("sbx_demo", endpointId, keys)).toEqual(envelope);
+    await client.revokeCooperativeConnection("sbx_demo", endpointId);
+
+    expect(calls.map((call) => call.url)).toEqual([
+      "https://app.boxcompute.ai/api/v2/sandboxes/sbx_demo/cooperative-connection",
+      `https://app.boxcompute.ai/api/v2/sandboxes/sbx_demo/cooperative-connection/${endpointId}`,
+      `https://app.boxcompute.ai/api/v2/sandboxes/sbx_demo/cooperative-connection/${endpointId}`,
+    ]);
+    expect(calls.map((call) => call.init?.method)).toEqual(["POST", "POST", "DELETE"]);
+    expect(calls.every((call) => call.init?.redirect === "error")).toBe(true);
+    expect(calls.every((call) => new Headers(call.init?.headers).get("authorization") === "Bearer bc_live_secret")).toBe(true);
+  });
+
+  it("rejects invalid cooperative inputs and responses without a second request", async () => {
+    const fetch = (async () => json({ private: "unexpected" }, 503)) as unknown as typeof globalThis.fetch;
+    const client = new BoxComputeClient({
+      url: "https://app.boxcompute.ai",
+      token: "bc_live_secret",
+      tokenFile: "/credential",
+    }, fetch);
+    const keys = {
+      client_key: `nodekey:${"a".repeat(64)}`,
+      ssh_key: `ssh-ed25519 ${"A".repeat(68)}`,
+      recipient_key: Buffer.alloc(32, 2).toString("base64"),
+    };
+    await expect(client.activateCooperativeConnection("runtime-internal", keys)).rejects.toThrow("unavailable");
+    await expect(client.activateCooperativeConnection("sbx_demo", keys)).rejects.toThrow("unavailable");
+  });
 });
