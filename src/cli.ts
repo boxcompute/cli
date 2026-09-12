@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { readFileSync, realpathSync } from "node:fs";
 import { hostname, platform, release } from "node:os";
 import { fileURLToPath } from "node:url";
+import { downloadFile, uploadFile } from "./files.js";
 import {
   BoxComputeClient,
   BoxComputeHttpError,
@@ -52,6 +53,8 @@ Commands:
     status                        Inspect one sandbox
     logs                          Read current or retained sandbox logs
     exec                          Execute a program inside a sandbox
+    upload                        Upload a local file (up to 8 MiB)
+    download                      Download a complete file to a new local path
     delete                        [alias: rm] Destroy the runtime; the workspace remains
   skill                           [alias: skills] Manage coding-harness skills
     detect                        Detect compatible coding harnesses
@@ -99,6 +102,19 @@ Commands:
   exec SANDBOX_ID [options] -- PROGRAM [ARG...]
                                   Execute a program inside a sandbox
   delete SANDBOX_ID --yes         [alias: rm] Destroy the runtime; keep the workspace
+  upload SANDBOX_ID LOCAL REMOTE  Upload raw bytes under /workspace (up to 8 MiB)
+  download SANDBOX_ID REMOTE LOCAL
+                                  Download all chunks; refuse an existing local file
+
+Start options:
+
+  --vm                            Request the approval-only, offline 10-minute VM beta
+  --idempotency-key KEY            Required for --vm; reuse key and options on retry
+  --name NAME                      Optional sandbox name (1–80 trimmed characters)
+
+  Start returns the creation receipt, which can be pending. Use status to check
+  readiness. No automatic retries or replacement VMs. Transfers never retry;
+  downloads stop after five minutes and discard partial output on failure.
 
 Exec options:
 
@@ -657,9 +673,23 @@ export async function runCli(argv: string[], supplied: CliDependencies = {}): Pr
   const id = args.shift();
   if (!action || !id) throw new UsageError("sandbox requires an action and sandbox ID");
   if (action === "start") {
-    if (args.length) throw new UsageError("sandbox start takes one workspace ID");
-    const sandbox = await client.start(id);
+    const vmSandbox = flag(args, "vm");
+    const idempotencyKey = option(args, "idempotency-key");
+    const name = option(args, "name");
+    if (args.length) throw new UsageError(`Unknown sandbox start option: ${args[0]}`);
+    if (vmSandbox && !idempotencyKey) throw new UsageError("sandbox start --vm requires --idempotency-key; save and reuse it with the same options on retry");
+    const sandbox = await client.start(id, { vmSandbox, idempotencyKey, name });
     emit(io, json, { sandbox }, sandboxLine(sandbox));
+    if (vmSandbox) write(io.stderr, "Creation receipt only. Save the sandbox ID; use sandbox status to confirm vmSandbox=true and running. Reuse the same key and options on retry.\n");
+    return 0;
+  }
+  if (action === "upload" || action === "download") {
+    if (args.length !== 2) throw new UsageError(`sandbox ${action} requires SANDBOX_ID ${action === "upload" ? "LOCAL REMOTE" : "REMOTE LOCAL"}`);
+    const [source, destination] = args;
+    const bytes = action === "upload"
+      ? await uploadFile(client, id, source, destination)
+      : await downloadFile(client, id, source, destination);
+    emit(io, json, { sandboxId: id, source, destination, bytes }, `${action === "upload" ? "Uploaded" : "Downloaded"} ${bytes} bytes: ${source} -> ${destination}\n`);
     return 0;
   }
   if (action === "status") {
@@ -722,7 +752,7 @@ function helpFor(command?: string): string {
 }
 
 export function formatCliError(error: unknown): string {
-  if (error instanceof BoxComputeHttpError) return `${error.message} (HTTP ${error.status})`;
+  if (error instanceof BoxComputeHttpError) return `${error.message} (HTTP ${error.status}${error.code ? ` ${error.code}` : ""})`;
   return error instanceof Error ? error.message : String(error);
 }
 
