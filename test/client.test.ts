@@ -75,6 +75,26 @@ describe("BoxCompute client", () => {
     expect(calls[6]!.url).toEndWith("/api/v2/auth");
   });
 
+  it("forwards an optional scheduler CPU allocation when starting a sandbox", async () => {
+    const bodies: unknown[] = [];
+    const client = new BoxComputeClient({
+      url: "https://app.boxcompute.ai",
+      token: "bc_live_secret",
+      tokenFile: "/credential",
+    }, (async (_input: string | URL | Request, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return json({ sandbox: {} }, 201);
+    }) as typeof globalThis.fetch);
+
+    await client.start("workspace-default");
+    await client.start("workspace-sized", { cpu: 0.5 });
+
+    expect(bodies).toEqual([
+      { workspaceId: "workspace-default" },
+      { workspaceId: "workspace-sized", cpu: 0.5 },
+    ]);
+  });
+
   it("explains the server-first requirement when v2 is unavailable", async () => {
     const client = new BoxComputeClient({
       url: "https://old.boxcompute.example",

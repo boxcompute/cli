@@ -110,11 +110,11 @@ export class BoxComputeClient {
     return (await this.request<{ sandbox: Sandbox }>(`/api/v2/sandboxes/${encodeURIComponent(id)}`)).sandbox;
   }
 
-  async start(workspaceId: string): Promise<Sandbox> {
+  async start(workspaceId: string, input: { cpu?: number } = {}): Promise<Sandbox> {
     return (await this.request<{ sandbox: Sandbox }>("/api/v2/sandboxes", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ workspaceId }),
+      body: JSON.stringify({ workspaceId, ...input }),
     })).sandbox;
   }
 

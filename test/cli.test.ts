@@ -161,6 +161,58 @@ describe("bxc CLI", () => {
     expect(output(io.stdout)).toBe("workspace-one\tDemo\n");
   });
 
+  it("sets scheduler CPU when starting a sandbox", async () => {
+    const connection = { url: "https://app.boxcompute.ai", token: "bc_live_test", tokenFile: "/credential" };
+    const bodies: unknown[] = [];
+    const dependencies = {
+      io: streams(),
+      env: {},
+      loadConnection: async () => connection,
+      fetch: (async (_input: string | URL | Request, init?: RequestInit) => {
+        bodies.push(JSON.parse(String(init?.body)));
+        return new Response(JSON.stringify({ sandbox: {
+          id: "sandbox-one",
+          workspaceId: "workspace-one",
+          name: "Demo",
+          state: "running",
+          runtimeId: "runtime-one",
+          retainedRuntimeId: null,
+          image: null,
+          createdAt: 1,
+          lastUsedAt: 1,
+        } }), { status: 201, headers: { "content-type": "application/json" } });
+      }) as typeof globalThis.fetch,
+    };
+
+    expect(await runCli(["sandbox", "start", "workspace-one", "--cpu", "0.1"], dependencies)).toBe(0);
+    expect(await runCli(["sandbox", "start", "workspace-one", "--cpu", "4"], dependencies)).toBe(0);
+
+    expect(bodies).toEqual([
+      { workspaceId: "workspace-one", cpu: 0.1 },
+      { workspaceId: "workspace-one", cpu: 4 },
+    ]);
+  });
+
+  it("rejects scheduler CPU outside the supported range before calling the server", async () => {
+    const dependencies = {
+      io: streams(),
+      env: {},
+      loadConnection: async () => ({
+        url: "https://app.boxcompute.ai",
+        token: "bc_live_test",
+        tokenFile: "/credential",
+      }),
+      fetch: (async () => { throw new Error("should not fetch"); }) as unknown as typeof globalThis.fetch,
+    };
+
+    await expect(runCli(["sandbox", "start", "workspace-one", "--cpu", "0.09"], dependencies))
+      .rejects.toThrow("--cpu must be a number from 0.1 to 4");
+    await expect(runCli(["sandbox", "start", "workspace-one", "--cpu", "4.01"], dependencies))
+      .rejects.toThrow("--cpu must be a number from 0.1 to 4");
+    await expect(runCli(["sandbox", "start", "workspace-one", "--cpu", "fast"], dependencies))
+      .rejects.toThrow("--cpu must be a number from 0.1 to 4");
+  });
+
   it("reads retained sandbox logs with filters without starting compute", async () => {
     const io = streams();
     const connection = { url: "https://app.boxcompute.ai", token: "bc_live_test", tokenFile: "/credential" };
@@ -308,6 +360,10 @@ describe("bxc CLI", () => {
     const io = streams();
     expect(await runCli(["skill", "--help"], { io, env: {} })).toBe(0);
     expect(output(io.stdout)).toContain("Usage: bxc skill <command> [options]");
+
+    const sandboxIo = streams();
+    expect(await runCli(["sandbox", "start", "--help"], { io: sandboxIo, env: {} })).toBe(0);
+    expect(output(sandboxIo.stdout)).toContain("--cpu CPU");
 
     const versionIo = streams();
     expect(await runCli(["--version"], { io: versionIo, env: {} })).toBe(0);
