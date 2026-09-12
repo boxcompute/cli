@@ -1,13 +1,32 @@
 import type { Connection } from "./config.js";
 
+export const FILE_CHUNK_BYTES = 8_388_608;
+
+export type FileChunk = {
+  bytes: Uint8Array;
+  nextOffset: number;
+  size: number;
+  eof: boolean;
+  nextCursor?: string;
+};
+
+export function validateFilePath(path: string): void {
+  if (path.length > 4096 || path.includes("\0") ||
+    !(path === "/workspace" || path.startsWith("/workspace/")) ||
+    path.split("/").some((part) => part === "." || part === "..")) {
+    throw new Error("Remote file paths must be absolute under /workspace, at most 4096 characters, without dot components or NUL");
+  }
+}
+
 export type Sandbox = {
   id: string;
   workspaceId: string;
   name: string;
-  state: "cold" | "running";
-  runtimeId: string | null;
-  retainedRuntimeId: string | null;
-  image: string | null;
+  state: "cold" | "pending" | "running" | "expired";
+  vmSandbox?: boolean;
+  runtimeId?: string | null;
+  retainedRuntimeId?: string | null;
+  image?: string | null;
   createdAt: number;
   lastUsedAt: number | null;
 };
@@ -110,12 +129,101 @@ export class BoxComputeClient {
     return (await this.request<{ sandbox: Sandbox }>(`/api/v2/sandboxes/${encodeURIComponent(id)}`)).sandbox;
   }
 
-  async start(workspaceId: string): Promise<Sandbox> {
-    return (await this.request<{ sandbox: Sandbox }>("/api/v2/sandboxes", {
+  async start(workspaceId: string, input: {
+    vmSandbox?: boolean;
+    idempotencyKey?: string;
+    name?: string;
+  } = {}): Promise<Sandbox> {
+    if (input.vmSandbox && !input.idempotencyKey) throw new Error("VM creation requires --idempotency-key; reuse the same key and options on retry");
+    if (input.idempotencyKey !== undefined && !/^[\x21-\x7e]{1,255}$/.test(input.idempotencyKey)) {
+      throw new Error("Idempotency key must contain 1–255 visible ASCII characters without spaces");
+    }
+    const name = input.name?.trim();
+    if (name !== undefined && (!name || name.length > 80)) throw new Error("Sandbox name must contain 1–80 trimmed characters");
+    const sandbox = (await this.request<{ sandbox: Sandbox }>("/api/v2/sandboxes", {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ workspaceId }),
+      headers: {
+        "content-type": "application/json",
+        ...(input.idempotencyKey !== undefined ? { "idempotency-key": input.idempotencyKey } : {}),
+      },
+      body: JSON.stringify({ workspaceId, ...(input.vmSandbox ? { vmSandbox: true } : {}), ...(name !== undefined ? { name } : {}) }),
+      signal: AbortSignal.timeout(30_000),
+      redirect: "error",
     })).sandbox;
+    if (input.vmSandbox && sandbox.vmSandbox !== true) {
+      throw new Error(`Server did not confirm VM selection for sandbox ${sandbox.id}; inspect and clean up that ID before retrying. Upgrade the server to one that supports VM creation.`);
+    }
+    return sandbox;
+  }
+
+  async upload(id: string, path: string, bytes: Uint8Array): Promise<void> {
+    validateFilePath(path);
+    if (bytes.byteLength > FILE_CHUNK_BYTES) throw new Error("Uploads are limited to 8 MiB");
+    const response = await this.fetchImpl(new URL(
+      `/api/v2/sandboxes/${encodeURIComponent(id)}/files/content?${new URLSearchParams({ path })}`,
+      this.connection.url,
+    ), {
+      method: "PUT",
+      headers: { authorization: `Bearer ${this.connection.token}`, "content-type": "application/octet-stream" },
+      body: new Uint8Array(bytes),
+      signal: AbortSignal.timeout(30_000),
+      redirect: "error",
+    });
+    if (!response.ok) throw await responseError(response);
+    await response.body?.cancel();
+    if (response.status !== 204) throw new Error("File upload returned an unexpected status");
+  }
+
+  async readFile(id: string, path: string, offset = 0, cursor?: string, signal?: AbortSignal): Promise<FileChunk> {
+    validateFilePath(path);
+    if (!Number.isSafeInteger(offset) || offset < 0) throw new Error("Invalid file offset");
+    const query = new URLSearchParams({ path, offset: String(offset), maxBytes: String(FILE_CHUNK_BYTES) });
+    if (cursor !== undefined) query.set("cursor", cursor);
+    const response = await this.fetchImpl(new URL(
+      `/api/v2/sandboxes/${encodeURIComponent(id)}/files/content?${query}`, this.connection.url,
+    ), {
+      headers: { authorization: `Bearer ${this.connection.token}` },
+      signal: signal ?? AbortSignal.timeout(30_000),
+      redirect: "error",
+    });
+    if (!response.ok) throw await responseError(response);
+    try {
+      if (response.status !== 200) throw new Error("File reads require HTTP 200");
+      const integer = (name: string) => {
+        const value = response.headers.get(`x-boxcompute-${name}`);
+        if (value === null || !/^\d+$/.test(value) || !Number.isSafeInteger(Number(value))) throw new Error("Invalid file range metadata");
+        return Number(value);
+      };
+      const start = integer("offset");
+      const nextOffset = integer("next-offset");
+      const size = integer("file-size");
+      const eof = response.headers.get("x-boxcompute-eof");
+      const nextCursor = response.headers.get("x-boxcompute-next-cursor");
+      if (start !== offset || nextOffset < start || nextOffset > size || nextOffset - start > FILE_CHUNK_BYTES ||
+        (eof !== "true" && eof !== "false") || (eof === "true") !== (nextOffset === size) ||
+        (eof === "false" && (nextOffset === start || !nextCursor))) throw new Error("Invalid file range metadata");
+      const reader = response.body?.getReader();
+      const chunks: Uint8Array[] = [];
+      let length = 0;
+      if (reader) {
+        try {
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            length += value.byteLength;
+            if (length > nextOffset - start) throw new Error("File response exceeds its declared range");
+            chunks.push(value);
+          }
+        } finally {
+          await reader.cancel().catch(() => undefined);
+          reader.releaseLock();
+        }
+      }
+      if (length !== nextOffset - start) throw new Error("Incomplete file response");
+      return { bytes: Buffer.concat(chunks), nextOffset, size, eof: eof === "true", nextCursor: nextCursor ?? undefined };
+    } finally {
+      await response.body?.cancel().catch(() => undefined);
+    }
   }
 
   async execute(id: string, input: {

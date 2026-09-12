@@ -52,6 +52,29 @@ bxc sandbox logs SANDBOX_ID --source execute
 bxc sandbox exec SANDBOX_ID -- python -m pytest
 ```
 
+### VM sandbox beta
+
+Approved accounts can create a VM with CLI 0.4.0 or newer:
+
+```sh
+# Generate and save a unique key once; reuse it and the same options on retry.
+bxc --json sandbox start WORKSPACE_ID --vm --idempotency-key SAVED_UNIQUE_KEY
+bxc --json sandbox status SANDBOX_ID
+# Wait for vmSandbox=true and state=running before transferring or executing.
+bxc sandbox upload SANDBOX_ID fixture.txt /workspace/fixture.txt
+bxc sandbox exec SANDBOX_ID --timeout 10 -- /bin/cat /workspace/fixture.txt
+bxc sandbox download SANDBOX_ID /workspace/fixture.txt downloaded.txt
+bxc sandbox delete SANDBOX_ID --yes
+```
+
+See [Test tools in a VM sandbox (Beta)](docs/vm-sandbox-beta.md) for the CLI and
+API walkthroughs, retry recovery, and Hermes limitations. VMs have a fixed
+10-minute lifetime, temporary storage, and no external network or SSH access.
+Start returns a creation receipt, which may be pending. It does not wait for
+readiness or automatically retry. Uploads are limited to 8 MiB; downloads read
+to EOF and refuse to overwrite local files. Without `--vm`, start retains its
+ordinary Sandbox behavior.
+
 Run `bxc` or `bxc --help` for the complete command reference. The previous
 `bcompute` executable remains available as a compatibility alias.
 

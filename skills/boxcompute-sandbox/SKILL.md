@@ -22,6 +22,32 @@ bxc --json sandbox start WORKSPACE_ID
 
 The returned sandbox `id` is the stable instance ID used by later commands.
 
+## VM beta and files (CLI 0.4.0+)
+
+For approved-account offline VM tests, use `bxc --json sandbox start WORKSPACE_ID
+--vm --idempotency-key KEY`. Generate and save one unique key per intended VM;
+reuse the same key, workspace, and optional `--name` on retry. Save the returned
+ID even when pending. Start does not wait; inspect status and require
+`vmSandbox: true` and `state: running` before work. Stop waiting after five
+minutes and clean up the test VM. Never change keys to recover a stuck create.
+
+VMs have 0.5 CPU, 1 GiB RAM, a 256 MiB temporary workspace, no external network
+or SSH, and a fixed 600-second lifetime including boot. Execution does not
+extend that lifetime or replace an expired VM. Probe executables; dependencies
+are not guaranteed and online installation is unavailable.
+
+```sh
+bxc sandbox upload SANDBOX_ID fixture.txt /workspace/fixture.txt
+bxc sandbox download SANDBOX_ID /workspace/result.txt result.txt
+```
+
+Uploads send raw bytes and are limited to 8 MiB. Downloads follow cursors to
+EOF, discard partial output on errors, and require a new local destination.
+Remote paths stay under `/workspace`; create parent directories with exec.
+Stop writers before downloading state. For disposable VM tests, export early
+and delete with `bxc sandbox delete SANDBOX_ID --yes`, including on test failure
+or expiry. Ordinary Sandbox persistence guidance below does not apply to VMs.
+
 ## Execute work
 
 Prefer argument-vector execution, which avoids a local shell:
