@@ -3,6 +3,20 @@
 This file records user-visible changes to the BoxCompute CLI. GitHub Releases
 use the same notes and bind them to the exact source commit.
 
+## [0.2.5] - 2026-09-12
+
+Sandbox creation can now request a per-sandbox scheduler CPU allocation.
+
+### CLI users
+
+- Pass `--cpu CPU` to `bxc sandbox start WORKSPACE_ID` to request any value
+  from 0.1 through 4 CPUs.
+- Omitting `--cpu` preserves the server's default scheduler CPU allocation.
+
+### Security
+
+No security-relevant changes.
+
 ## [0.2.4] - 2026-09-09
 
 `bxc sandbox exec` now leaves arguments after `--` entirely to the program
