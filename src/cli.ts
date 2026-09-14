@@ -79,6 +79,7 @@ Examples:
   $ bxc skill install
   $ bxc workspaces
   $ bxc sandbox start WORKSPACE_ID
+  $ bxc sandbox start WORKSPACE_ID --cpu 2
   $ bxc sandbox logs SANDBOX_ID --source execute
   $ bxc sandbox exec SANDBOX_ID -- python -m pytest
 
@@ -99,6 +100,10 @@ Commands:
   exec SANDBOX_ID [options] -- PROGRAM [ARG...]
                                   Execute a program inside a sandbox
   delete SANDBOX_ID --yes         [alias: rm] Destroy the runtime; keep the workspace
+
+Start options:
+
+  --cpu CPU                       Scheduler CPU allocation (0.1–4; server default if omitted)
 
 Exec options:
 
@@ -335,6 +340,15 @@ function positive(value: string | undefined, name: string): number | undefined {
   if (value === undefined) return undefined;
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new UsageError(`${name} must be a positive integer`);
+  return parsed;
+}
+
+function schedulerCpu(value: string | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0.1 || parsed > 4) {
+    throw new UsageError("--cpu must be a number from 0.1 to 4");
+  }
   return parsed;
 }
 
@@ -657,8 +671,9 @@ export async function runCli(argv: string[], supplied: CliDependencies = {}): Pr
   const id = args.shift();
   if (!action || !id) throw new UsageError("sandbox requires an action and sandbox ID");
   if (action === "start") {
-    if (args.length) throw new UsageError("sandbox start takes one workspace ID");
-    const sandbox = await client.start(id);
+    const cpu = schedulerCpu(option(args, "cpu"));
+    if (args.length) throw new UsageError(`Unknown sandbox start option: ${args[0]}`);
+    const sandbox = await client.start(id, { cpu });
     emit(io, json, { sandbox }, sandboxLine(sandbox));
     return 0;
   }

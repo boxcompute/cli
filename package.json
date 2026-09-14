@@ -1,6 +1,6 @@
 {
   "name": "@boxcompute/cli",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "Connect local AI agents to BoxCompute sandboxes",
   "keywords": [
     "boxcompute",

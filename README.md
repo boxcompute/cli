@@ -47,10 +47,15 @@ bxc doctor
 bxc workspaces
 bxc sandboxes
 bxc sandbox start WORKSPACE_ID
+# Optionally request 0.1–4 scheduler CPUs for this sandbox.
+bxc sandbox start WORKSPACE_ID --cpu 2
 # Use the returned sandbox instance ID for later commands.
 bxc sandbox logs SANDBOX_ID --source execute
 bxc sandbox exec SANDBOX_ID -- python -m pytest
 ```
+
+When `--cpu` is omitted, BoxCompute uses the server's default scheduler CPU
+allocation.
 
 Run `bxc` or `bxc --help` for the complete command reference. The previous
 `bcompute` executable remains available as a compatibility alias.
