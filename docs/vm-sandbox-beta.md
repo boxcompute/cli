@@ -12,7 +12,8 @@ workloads or always-on services, and active VMs bill until you delete them.
 omits the runtime selector and waits up to 180 seconds for `running` — plus
 `upload` and `download`. Use `--vm --idempotency-key KEY` for an explicit VM
 create with your own retry key, `--no-wait` for the receipt only, and
-`--gvisor` for a container sandbox instead. The [CLI walkthrough](#cli-walkthrough-040-or-newer)
+`--gvisor` for a container sandbox instead. CLI 0.5.0 or newer adds `--size
+small|large` for the VM profile. The [CLI walkthrough](#cli-walkthrough-040-or-newer)
 uses browser login and the CLI's saved credential. The direct API walkthrough
 uses a separately loaded account API key; do not extract the CLI's credential.
 Experimental Tailcat SSH does not apply to VM sandboxes.
@@ -21,7 +22,8 @@ The walkthrough uses a small text fixture and requires no additional software
 inside the VM. The [Hermes section](#evaluating-hermes-agent) explains what you
 can investigate for an agent integration and what is not supported yet.
 
-Last updated: September 17, 2026. VM contract updated September 17, 2026.
+Last updated: September 17, 2026. VM contract updated September 17, 2026; VM
+sizing (`size`) added September 17, 2026.
 
 ## Check whether your experiment fits
 
@@ -29,7 +31,7 @@ Last updated: September 17, 2026. VM contract updated September 17, 2026.
 | --- | --- |
 | Availability | Any authenticated account. No separate VM approval. |
 | Selection | Omitted `vmSandbox` selects the VM runtime (the default); `vmSandbox: false` explicitly selects a gVisor container sandbox. Rejected VM requests do not fall back to that path. |
-| Resources | Fixed 500m CPU (0.5 CPU), 1,024 MiB RAM, 10 GiB workspace. No public sizing controls. |
+| Resources | Sizing is chosen at create with `size`. `small` (default) is 500m CPU (0.5 CPU), 1,024 MiB RAM; `large` is 1,536m CPU (1.5 CPU), 3,072 MiB RAM. Both get a 10 GiB workspace. |
 | Lifetime | No automatic expiry. The VM exists, and bills for active use, until you delete it. |
 | Image | Immutable, server-selected approved minimal Ubuntu image. No arbitrary image override, library profile, or attached volumes. |
 | User/runtime | Unprivileged user; `HOME=/workspace`. No sudo/root installation or SSH login. Check that your required executables are available; Node.js, uv and your tool's dependencies are not guaranteed. |
@@ -72,8 +74,10 @@ bxc --json sandbox start "$WORKSPACE_ID" > vm-create-response.json
 For an explicit VM create with your own retry key, add
 `--vm --idempotency-key "$CREATE_KEY"` (generate and save the key once) and
 `--no-wait` to get the creation receipt immediately; the receipt can be
-`pending`, and a successful exit does not prove readiness. Either way, save the
-returned sandbox ID separately:
+`pending`, and a successful exit does not prove readiness. Add
+`--size large` for the 3x profile (1.5 CPU, 3,072 MiB RAM); the default is
+`--size small` (0.5 CPU, 1,024 MiB RAM), and `size` is VM only. Either way, save
+the returned sandbox ID separately:
 
 ```bash
 SANDBOX_ID=$(jq -er '.sandbox.id | strings | select(length > 0)' vm-create-response.json)
@@ -239,10 +243,13 @@ If your shell closes, restore `CREATE_KEY` from `vm-create-key.txt`, keep
 generates a new key. Restore any saved sandbox ID from `vm-sandbox-id.txt`.
 
 Only `workspaceId`, optional `name` (1–80 trimmed characters), `vmSandbox`,
-and `blockNetwork` (VM only; omitted means outbound Internet) configure public
-creation. Unknown fields are currently discarded, not sizing controls. Do
-not send `image`, `backend`, `cpu` (container sandboxes only), `memoryMiB`,
-`workspaceMiB`, `timeoutSeconds`, `libraries`, or `volumes`.
+`size` (VM only: `small` or `large`, default `small`), and `blockNetwork` (VM
+only; omitted means outbound Internet) configure public creation. `small` is
+0.5 CPU / 1,024 MiB and `large` is 1.5 CPU / 3,072 MiB. `size` applies to VMs
+only: gVisor ignores `small` and rejects `large`. Unknown fields are currently
+discarded, not sizing controls. Do not send `image`, `backend`, `cpu`
+(container sandboxes only), `memoryMiB`, `workspaceMiB`, `timeoutSeconds`,
+`libraries`, or `volumes`.
 
 An explicit `vmSandbox:true` requires `Idempotency-Key`: 1–255 visible ASCII
 characters, no spaces. An omitted `vmSandbox` may be sent without one; the

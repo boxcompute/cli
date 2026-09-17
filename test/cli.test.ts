@@ -193,6 +193,56 @@ describe("bxc CLI", () => {
     ]);
   });
 
+  it("sends the VM size, defaulting to small, and rejects large on gVisor", async () => {
+    const connection = { url: "https://app.boxcompute.ai", token: "bc_live_test", tokenFile: "/credential" };
+    const bodies: unknown[] = [];
+    const dependencies = {
+      io: streams(),
+      env: {},
+      loadConnection: async () => connection,
+      fetch: (async (_input: string | URL | Request, init?: RequestInit) => {
+        bodies.push(JSON.parse(String(init?.body)));
+        return new Response(JSON.stringify({ sandbox: {
+          id: "sandbox-one",
+          workspaceId: "workspace-one",
+          name: "Demo",
+          state: "running",
+          vmSandbox: true,
+          runtimeId: "runtime-one",
+          retainedRuntimeId: null,
+          image: null,
+          createdAt: 1,
+          lastUsedAt: 1,
+        } }), { status: 201, headers: { "content-type": "application/json" } });
+      }) as typeof globalThis.fetch,
+    };
+
+    expect(await runCli(["sandbox", "start", "workspace-one"], dependencies)).toBe(0);
+    expect(await runCli(["sandbox", "start", "workspace-one", "--size", "small"], dependencies)).toBe(0);
+    expect(await runCli([
+      "sandbox", "start", "workspace-one", "--vm", "--idempotency-key", "key-one", "--size", "large",
+    ], dependencies)).toBe(0);
+
+    expect(bodies).toEqual([
+      { workspaceId: "workspace-one", size: "small" },
+      { workspaceId: "workspace-one", size: "small" },
+      { workspaceId: "workspace-one", vmSandbox: true, size: "large" },
+    ]);
+
+    const rejected = {
+      io: streams(),
+      env: {},
+      loadConnection: async () => connection,
+      fetch: (async () => { throw new Error("should not fetch"); }) as unknown as typeof globalThis.fetch,
+    };
+    await expect(runCli(["sandbox", "start", "workspace-one", "--size", "medium"], rejected))
+      .rejects.toThrow("--size must be one of: small, large");
+    await expect(runCli(["sandbox", "start", "workspace-one", "--gvisor", "--size", "large"], rejected))
+      .rejects.toThrow("--size large is VM only");
+    await expect(runCli(["sandbox", "start", "workspace-one", "--cpu", "2", "--size", "large"], rejected))
+      .rejects.toThrow("--size large is VM only");
+  });
+
   it("rejects scheduler CPU outside the supported range before calling the server", async () => {
     const dependencies = {
       io: streams(),
@@ -362,8 +412,10 @@ describe("bxc CLI", () => {
     expect(output(io.stdout)).toContain("Usage: bxc skill <command> [options]");
 
     const sandboxIo = streams();
-    expect(await runCli(["sandbox", "start", "--help"], { io: sandboxIo, env: {} })).toBe(0);
-    expect(output(sandboxIo.stdout)).toContain("--cpu CPU");
+    expect(await runCli(["sandbox", "--help"], { io: sandboxIo, env: {} })).toBe(0);
+    const sandboxHelp = output(sandboxIo.stdout);
+    expect(sandboxHelp).toContain("--cpu CPU");
+    expect(sandboxHelp).toContain("--size small|large");
 
     const versionIo = streams();
     expect(await runCli(["--version"], { io: versionIo, env: {} })).toBe(0);

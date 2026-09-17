@@ -67,6 +67,8 @@ plain start returns a VM sandbox once it is running:
 bxc --json sandbox start WORKSPACE_ID
 # Explicit VM creation with your own retry key; --no-wait returns the receipt.
 bxc --json sandbox start WORKSPACE_ID --vm --idempotency-key SAVED_UNIQUE_KEY --no-wait
+# Triple the default VM profile (1.5 CPU, 3072 MiB). VM only.
+bxc --json sandbox start WORKSPACE_ID --vm --idempotency-key SAVED_UNIQUE_KEY --size large
 bxc --json sandbox status SANDBOX_ID
 # Container sandbox instead (supports --cpu); explicit gVisor opt-out.
 bxc sandbox start WORKSPACE_ID --gvisor --cpu 2
@@ -77,11 +79,13 @@ bxc sandbox delete SANDBOX_ID --yes
 ```
 
 See [Test tools in a VM sandbox](docs/vm-sandbox-beta.md) for the CLI and API
-walkthroughs, retry recovery, and Hermes limitations. VMs have a fixed profile
-(0.5 CPU, 1024 MiB memory, 10 GiB workspace), outbound Internet access by
-default, no automatic lifetime expiry, and no SSH access; delete them when
-done because active VMs keep billing. Uploads are limited to 8 MiB; downloads
-read to EOF and refuse to overwrite local files.
+walkthroughs, retry recovery, and Hermes limitations. VMs default to the
+`small` profile (0.5 CPU, 1024 MiB memory, 10 GiB workspace) and `--size large`
+selects the 3x profile (1.5 CPU, 3072 MiB memory). Sizing is VM only: the
+gVisor runtime ignores `small` and rejects `large`. VMs have outbound Internet
+access by default, no automatic lifetime expiry, and no SSH access; delete them
+when done because active VMs keep billing. Uploads are limited to 8 MiB;
+downloads read to EOF and refuse to overwrite local files.
 
 Run `bxc` or `bxc --help` for the complete command reference. The previous
 `bcompute` executable remains available as a compatibility alias.

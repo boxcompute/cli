@@ -32,7 +32,11 @@ retry, and save the returned ID even when pending. `--no-wait` returns the
 creation receipt immediately. Use `--gvisor` for a container sandbox instead.
 Never change keys to recover a stuck create.
 
-VMs have a fixed profile (0.5 CPU, 1024 MiB RAM, 10 GiB workspace), outbound
+VMs are sized at create with `--size small|large` (default `small`): small is
+0.5 CPU / 1024 MiB RAM and large is 1.5 CPU / 3072 MiB RAM, both with a 10 GiB
+workspace. Sizing is VM only: gVisor ignores `small` and rejects `large`, and
+VM sizing is mutually exclusive with `--cpu`. Use `--size large` only when the
+task needs more than the default profile; it bills more. VMs have outbound
 Internet access by default, no SSH, and no automatic lifetime expiry — delete
 the VM when finished because active VMs keep billing. Execution does not
 replace an expired VM. Probe executables; dependencies are not guaranteed.
