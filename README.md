@@ -57,6 +57,32 @@ bxc sandbox exec SANDBOX_ID -- python -m pytest
 When `--cpu` is omitted, BoxCompute uses the server's default scheduler CPU
 allocation.
 
+### VM sandboxes
+
+Any authenticated account can create a VM; VM is the default runtime, so a
+plain start returns a VM sandbox once it is running:
+
+```sh
+# Default runtime (VM). Start waits up to 180 seconds for running.
+bxc --json sandbox start WORKSPACE_ID
+# Explicit VM creation with your own retry key; --no-wait returns the receipt.
+bxc --json sandbox start WORKSPACE_ID --vm --idempotency-key SAVED_UNIQUE_KEY --no-wait
+bxc --json sandbox status SANDBOX_ID
+# Container sandbox instead (supports --cpu); explicit gVisor opt-out.
+bxc sandbox start WORKSPACE_ID --gvisor --cpu 2
+bxc sandbox upload SANDBOX_ID fixture.txt /workspace/fixture.txt
+bxc sandbox exec SANDBOX_ID --timeout 10 -- /bin/cat /workspace/fixture.txt
+bxc sandbox download SANDBOX_ID /workspace/fixture.txt downloaded.txt
+bxc sandbox delete SANDBOX_ID --yes
+```
+
+See [Test tools in a VM sandbox](docs/vm-sandbox-beta.md) for the CLI and API
+walkthroughs, retry recovery, and Hermes limitations. VMs have a fixed profile
+(0.5 CPU, 1024 MiB memory, 10 GiB workspace), outbound Internet access by
+default, no automatic lifetime expiry, and no SSH access; delete them when
+done because active VMs keep billing. Uploads are limited to 8 MiB; downloads
+read to EOF and refuse to overwrite local files.
+
 Run `bxc` or `bxc --help` for the complete command reference. The previous
 `bcompute` executable remains available as a compatibility alias.
 

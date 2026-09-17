@@ -188,8 +188,8 @@ describe("bxc CLI", () => {
     expect(await runCli(["sandbox", "start", "workspace-one", "--cpu", "4"], dependencies)).toBe(0);
 
     expect(bodies).toEqual([
-      { workspaceId: "workspace-one", cpu: 0.1 },
-      { workspaceId: "workspace-one", cpu: 4 },
+      { workspaceId: "workspace-one", cpu: 0.1, vmSandbox: false },
+      { workspaceId: "workspace-one", cpu: 4, vmSandbox: false },
     ]);
   });
 

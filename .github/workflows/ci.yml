@@ -79,3 +79,4 @@ jobs:
           actual="$($RUNNER_TEMP/boxcompute-cli/bin/bxc --version)"
           expected="$(node --print "require('./package.json').version")"
           test "$actual" = "$expected"
+          node scripts/smoke-vm.mjs "$RUNNER_TEMP/boxcompute-cli/lib/node_modules/@boxcompute/cli"

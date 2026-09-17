@@ -3,6 +3,36 @@
 This file records user-visible changes to the BoxCompute CLI. GitHub Releases
 use the same notes and bind them to the exact source commit.
 
+## [0.4.0] - 2026-09-13
+
+Create VM sandboxes (now the default runtime) and transfer files with the
+authenticated CLI.
+
+### CLI users
+
+- Upgrade with `bxc update`. `sandbox start WORKSPACE_ID` uses the server's
+  default runtime (VM) and waits up to 180 seconds for a pending sandbox to
+  reach running, reporting the sandbox and its state either way.
+- `--gvisor` explicitly selects a container sandbox; `--cpu` implies it, since
+  only container sandboxes support CPU selection. `--vm` explicitly selects a
+  VM and still requires `--idempotency-key`, reused with the same options on
+  retry. `--no-wait` returns the creation receipt immediately.
+- `sandbox upload SANDBOX_ID LOCAL REMOTE` uploads up to 8 MiB of raw bytes.
+  `sandbox download SANDBOX_ID REMOTE LOCAL` follows file cursors to EOF and
+  creates a new local file only after the complete download succeeds.
+- Creation accepts optional `--name` and `--idempotency-key` for ordinary
+  sandboxes too. Status supports `pending`, `expired`, and `vmSandbox`.
+- The bundled VM guide and agent skill cover offline tests, recovery, cleanup,
+  and Hermes limitations. VM access no longer requires approval.
+
+### Security
+
+- New create/file requests reject redirects and have bounded timeouts. The CLI
+  does not automatically retry mutations or replace unavailable VMs.
+- Downloads validate range metadata and byte counts, discard partial files on
+  failure, and refuse to overwrite existing destinations. Local output has
+  owner-only permissions. Uploads are bounded even if the source file grows.
+
 ## [0.2.5] - 2026-09-12
 
 Sandbox creation can now request a per-sandbox scheduler CPU allocation.
