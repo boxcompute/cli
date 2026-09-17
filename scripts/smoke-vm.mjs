@@ -22,13 +22,21 @@ const dependencies = {
     assert.equal(new Headers(init.headers).get("authorization"), "Bearer test-token");
     if (init.method === "POST") {
       const body = JSON.parse(init.body);
+      if (body.workspaceId === "ws_large") {
+        assert.deepEqual(body, { workspaceId: "ws_large", vmSandbox: true, size: "large" });
+        assert.equal(new Headers(init.headers).get("idempotency-key"), "saved-large-key");
+        return Response.json({ sandbox: { id: "sbx_large", vmSandbox: true, state: "pending" } }, { status: 202 });
+      }
       if (body.vmSandbox === true) {
-        assert.deepEqual(body, { workspaceId: "ws_test", vmSandbox: true });
+        assert.deepEqual(body, { workspaceId: "ws_test", vmSandbox: true, size: "small" });
         assert.equal(new Headers(init.headers).get("idempotency-key"), "saved-key");
         return Response.json({ sandbox: { id: "sbx_vm", vmSandbox: true, state: "pending" } }, { status: 202 });
       }
-      assert.deepEqual(body, { workspaceId: "ws_default" });
+      assert.deepEqual(body, { workspaceId: "ws_default", size: "small" });
       return Response.json({ sandbox: { id: "sbx_default", vmSandbox: true, state: "pending" } }, { status: 202 });
+    }
+    if (url.pathname.endsWith("/sandboxes/sbx_large")) {
+      return Response.json({ sandbox: { id: "sbx_large", vmSandbox: true, state: "running" } });
     }
     if (url.pathname.endsWith("/sandboxes/sbx_vm")) {
       return Response.json({ sandbox: { id: "sbx_vm", vmSandbox: true, state: "running" } });
@@ -62,6 +70,10 @@ try {
   const defaulted = JSON.parse(io.stdout.read().toString()).sandbox;
   assert.equal(defaulted.state, "running");
   assert.equal(defaulted.vmSandbox, true);
+  assert.equal(await runCli([
+    "--json", "sandbox", "start", "ws_large", "--vm", "--idempotency-key", "saved-large-key", "--size", "large",
+  ], dependencies), 0);
+  assert.equal(JSON.parse(io.stdout.read().toString()).sandbox.state, "running");
   await writeFile(join(root, "input"), bytes);
   assert.equal(await runCli(["--json", "sandbox", "upload", "sbx_vm", join(root, "input"), "/workspace/binary"], dependencies), 0);
   assert.equal(JSON.parse(io.stdout.read().toString()).bytes, 4);

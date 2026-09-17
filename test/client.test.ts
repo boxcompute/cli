@@ -95,6 +95,39 @@ describe("BoxCompute client", () => {
     ]);
   });
 
+  it("sends VM size and omits it for gVisor", async () => {
+    const bodies: unknown[] = [];
+    const client = new BoxComputeClient({
+      url: "https://app.boxcompute.ai",
+      token: "bc_live_secret",
+      tokenFile: "/credential",
+    }, (async (_input: string | URL | Request, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return json({ sandbox: { vmSandbox: true } }, 201);
+    }) as typeof globalThis.fetch);
+
+    await client.start("workspace-vm", { vmSandbox: true, size: "small", idempotencyKey: "key-one" });
+    await client.start("workspace-vm", { vmSandbox: true, size: "large", idempotencyKey: "key-two" });
+    await client.start("workspace-vm", { gvisor: true, size: "small" });
+
+    expect(bodies).toEqual([
+      { workspaceId: "workspace-vm", vmSandbox: true, size: "small" },
+      { workspaceId: "workspace-vm", vmSandbox: true, size: "large" },
+      { workspaceId: "workspace-vm", vmSandbox: false },
+    ]);
+  });
+
+  it("rejects large VM sizing on the gVisor runtime", async () => {
+    const client = new BoxComputeClient({
+      url: "https://app.boxcompute.ai",
+      token: "bc_live_secret",
+      tokenFile: "/credential",
+    }, (async () => { throw new Error("should not fetch"); }) as unknown as typeof globalThis.fetch);
+
+    await expect(client.start("workspace-one", { gvisor: true, size: "large" }))
+      .rejects.toThrow("--size large is VM only");
+  });
+
   it("explains the server-first requirement when v2 is unavailable", async () => {
     const client = new BoxComputeClient({
       url: "https://old.boxcompute.example",

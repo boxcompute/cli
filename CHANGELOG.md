@@ -3,6 +3,26 @@
 This file records user-visible changes to the BoxCompute CLI. GitHub Releases
 use the same notes and bind them to the exact source commit.
 
+## [0.5.0] - 2026-09-17
+
+Choose a larger VM profile with `bxc sandbox start --size small|large`.
+
+### CLI users
+
+- `bxc sandbox start WORKSPACE_ID` now sends `size` in the create request. The
+  default is `--size small` (0.5 CPU, 1024 MiB memory), which matches the
+  profile every earlier release created.
+- `--size large` requests the 3x profile (1.5 CPU, 3072 MiB memory). It is VM
+  only: the gVisor container runtime ignores `small` and rejects `large`
+  before contacting the server. VM sizing and `--cpu` remain mutually
+  exclusive because `--cpu` selects gVisor.
+- Servers that do not know `size` discard it, so an older deployment keeps
+  working with the default profile; upgrade the server to use `large`.
+
+### Security
+
+No security-relevant changes.
+
 ## [0.4.0] - 2026-09-13
 
 Create VM sandboxes (now the default runtime) and transfer files with the

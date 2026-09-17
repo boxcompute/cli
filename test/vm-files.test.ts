@@ -111,7 +111,7 @@ describe("VM creation", () => {
       }) as typeof fetch,
     };
     expect(await runCli(["--json", "sandbox", "start", "ws_one"], dependencies)).toBe(0);
-    expect(bodies).toEqual([{ workspaceId: "ws_one" }]);
+    expect(bodies).toEqual([{ workspaceId: "ws_one", size: "small" }]);
     expect(JSON.parse(io.stdout.read().toString()).sandbox.state).toBe("running");
     expect(io.stderr.read().toString()).toContain("waiting up to 180 seconds");
   });

@@ -11,6 +11,7 @@ import {
   type Execution,
   type Sandbox,
   type SandboxLogs,
+  type SandboxSize,
   type Workspace,
 } from "./client.js";
 import {
@@ -83,6 +84,7 @@ Examples:
   $ bxc workspaces
   $ bxc sandbox start WORKSPACE_ID
   $ bxc sandbox start WORKSPACE_ID --cpu 2
+  $ bxc sandbox start WORKSPACE_ID --size large --idempotency-key SAVED_UNIQUE_KEY
   $ bxc sandbox logs SANDBOX_ID --source execute
   $ bxc sandbox exec SANDBOX_ID -- python -m pytest
 
@@ -109,6 +111,8 @@ Commands:
 
 Start options:
 
+  --size small|large              VM only: VM profile size (default: small).
+                                  small = 0.5 CPU / 1024 MiB; large = 1.5 CPU / 3072 MiB
   --vm                            Explicitly request a VM sandbox; requires
                                   --idempotency-key, reused with the same options on retry
   --gvisor                        Explicitly request a gVisor container sandbox
@@ -119,6 +123,8 @@ Start options:
   --no-wait                       Return the creation receipt without waiting
 
   Without --vm or --gvisor, the server's default runtime is selected (VM).
+  --size is VM only: gVisor ignores small and rejects large. VM sizing is
+  mutually exclusive with --cpu.
   Start waits up to 180 seconds for a pending sandbox to reach running and
   reports its state either way. No automatic retries or replacement VMs.
   Transfers never retry; downloads stop after five minutes and discard partial
@@ -711,6 +717,7 @@ export async function runCli(argv: string[], supplied: CliDependencies = {}): Pr
     const cpu = schedulerCpu(option(args, "cpu"));
     const vmSandbox = flag(args, "vm");
     const gvisor = flag(args, "gvisor");
+    const size: SandboxSize = oneOf(option(args, "size"), "--size", ["small", "large"] as const) ?? "small";
     const idempotencyKey = option(args, "idempotency-key");
     const name = option(args, "name");
     const noWait = flag(args, "no-wait");
@@ -718,10 +725,12 @@ export async function runCli(argv: string[], supplied: CliDependencies = {}): Pr
     if (vmSandbox && gvisor) throw new UsageError("sandbox start accepts either --vm or --gvisor, not both");
     if (vmSandbox && cpu !== undefined) throw new UsageError("VM sandboxes use a fixed CPU profile; --cpu selects the gVisor runtime");
     if (vmSandbox && !idempotencyKey) throw new UsageError("sandbox start --vm requires --idempotency-key; save and reuse it with the same options on retry");
+    if (gvisor && size === "large") throw new UsageError("--size large is VM only; gVisor container sandboxes ignore --size small");
     let sandbox = await client.start(id, {
       cpu,
       vmSandbox,
       gvisor: gvisor || cpu !== undefined,
+      size,
       idempotencyKey,
       name,
     });

@@ -2,6 +2,13 @@ import type { Connection } from "./config.js";
 
 export const FILE_CHUNK_BYTES = 8_388_608;
 
+export type SandboxSize = "small" | "large";
+
+export const SANDBOX_SIZE_PROFILES: Record<SandboxSize, { cpu: number; memoryMiB: number }> = {
+  small: { cpu: 0.5, memoryMiB: 1_024 },
+  large: { cpu: 1.5, memoryMiB: 3_072 },
+};
+
 export type FileChunk = {
   bytes: Uint8Array;
   nextOffset: number;
@@ -133,12 +140,14 @@ export class BoxComputeClient {
     cpu?: number;
     vmSandbox?: boolean;
     gvisor?: boolean;
+    size?: SandboxSize;
     idempotencyKey?: string;
     name?: string;
   } = {}): Promise<Sandbox> {
     if (input.vmSandbox && input.gvisor) throw new Error("VM and gVisor selection are mutually exclusive");
     if (input.vmSandbox && input.cpu !== undefined) throw new Error("VM sandboxes use a fixed CPU profile; --cpu selects the gVisor runtime");
     if (input.vmSandbox && !input.idempotencyKey) throw new Error("VM creation requires --idempotency-key; reuse the same key and options on retry");
+    if (input.gvisor && input.size === "large") throw new Error("--size large is VM only; gVisor container sandboxes ignore --size small");
     if (input.idempotencyKey !== undefined && !/^[\x21-\x7e]{1,255}$/.test(input.idempotencyKey)) {
       throw new Error("Idempotency key must contain 1–255 visible ASCII characters without spaces");
     }
@@ -154,6 +163,8 @@ export class BoxComputeClient {
         workspaceId,
         ...(input.cpu !== undefined ? { cpu: input.cpu } : {}),
         ...(input.gvisor ? { vmSandbox: false } : input.vmSandbox ? { vmSandbox: true } : {}),
+        // VM-only sizing: gVisor always uses the default profile.
+        ...(input.gvisor || input.size === undefined ? {} : { size: input.size }),
         ...(name !== undefined ? { name } : {}),
       }),
       signal: AbortSignal.timeout(30_000),
