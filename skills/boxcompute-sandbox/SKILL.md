@@ -22,19 +22,20 @@ bxc --json sandbox start WORKSPACE_ID
 
 The returned sandbox `id` is the stable instance ID used by later commands.
 
-## VM beta and files (CLI 0.4.0+)
+## VM sandboxes and files (CLI 0.4.0+)
 
-For approved-account offline VM tests, use `bxc --json sandbox start WORKSPACE_ID
---vm --idempotency-key KEY`. Generate and save one unique key per intended VM;
-reuse the same key, workspace, and optional `--name` on retry. Save the returned
-ID even when pending. Start does not wait; inspect status and require
-`vmSandbox: true` and `state: running` before work. Stop waiting after five
-minutes and clean up the test VM. Never change keys to recover a stuck create.
+VM is the default runtime: `bxc --json sandbox start WORKSPACE_ID` creates a VM
+and waits up to 180 seconds for `state: running`, reporting the sandbox either
+way. For an explicit VM create with your own retry key, add `--vm
+--idempotency-key KEY`; reuse the same key, workspace, and optional `--name` on
+retry, and save the returned ID even when pending. `--no-wait` returns the
+creation receipt immediately. Use `--gvisor` for a container sandbox instead.
+Never change keys to recover a stuck create.
 
-VMs have 0.5 CPU, 1 GiB RAM, a 256 MiB temporary workspace, no external network
-or SSH, and a fixed 600-second lifetime including boot. Execution does not
-extend that lifetime or replace an expired VM. Probe executables; dependencies
-are not guaranteed and online installation is unavailable.
+VMs have a fixed profile (0.5 CPU, 1024 MiB RAM, 10 GiB workspace), outbound
+Internet access by default, no SSH, and no automatic lifetime expiry — delete
+the VM when finished because active VMs keep billing. Execution does not
+replace an expired VM. Probe executables; dependencies are not guaranteed.
 
 ```sh
 bxc sandbox upload SANDBOX_ID fixture.txt /workspace/fixture.txt

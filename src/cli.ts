@@ -109,17 +109,20 @@ Commands:
 
 Start options:
 
-  --vm                            Request the approval-only, offline 10-minute VM beta
-  --idempotency-key KEY            Required for --vm; reuse key and options on retry
-  --name NAME                      Optional sandbox name (1–80 trimmed characters)
+  --vm                            Explicitly request a VM sandbox; requires
+                                  --idempotency-key, reused with the same options on retry
+  --gvisor                        Explicitly request a gVisor container sandbox
+  --cpu CPU                       gVisor only: scheduler CPU allocation (0.1–4);
+                                  implies --gvisor
+  --idempotency-key KEY           Required for --vm; reusable for any create
+  --name NAME                     Optional sandbox name (1–80 trimmed characters)
+  --no-wait                       Return the creation receipt without waiting
 
-  Start returns the creation receipt, which can be pending. Use status to check
-  readiness. No automatic retries or replacement VMs. Transfers never retry;
-  downloads stop after five minutes and discard partial output on failure.
-
-Start options:
-
-  --cpu CPU                       Scheduler CPU allocation (0.1–4; server default if omitted)
+  Without --vm or --gvisor, the server's default runtime is selected (VM).
+  Start waits up to 180 seconds for a pending sandbox to reach running and
+  reports its state either way. No automatic retries or replacement VMs.
+  Transfers never retry; downloads stop after five minutes and discard partial
+  output on failure.
 
 Exec options:
 
@@ -468,6 +471,24 @@ function sandboxLine(sandbox: Sandbox): string {
   return `${sandbox.id}\t${sandbox.state}\t${sandbox.name}\n`;
 }
 
+const SANDBOX_READY_TIMEOUT_MS = 180_000;
+const SANDBOX_READY_POLL_MS = 3_000;
+
+async function awaitRunning(
+  client: BoxComputeClient,
+  id: string,
+  sleep: (milliseconds: number) => Promise<void>,
+  now: () => number,
+): Promise<{ sandbox: Sandbox; timedOut: boolean }> {
+  const deadline = now() + SANDBOX_READY_TIMEOUT_MS;
+  for (;;) {
+    await sleep(SANDBOX_READY_POLL_MS);
+    const sandbox = await client.inspect(id);
+    if (sandbox.state === "running" || sandbox.state === "expired") return { sandbox, timedOut: false };
+    if (now() >= deadline) return { sandbox, timedOut: true };
+  }
+}
+
 function workspaceLine(workspace: Workspace): string {
   return `${workspace.id}\t${workspace.name}\n`;
 }
@@ -689,13 +710,38 @@ export async function runCli(argv: string[], supplied: CliDependencies = {}): Pr
   if (action === "start") {
     const cpu = schedulerCpu(option(args, "cpu"));
     const vmSandbox = flag(args, "vm");
+    const gvisor = flag(args, "gvisor");
     const idempotencyKey = option(args, "idempotency-key");
     const name = option(args, "name");
+    const noWait = flag(args, "no-wait");
     if (args.length) throw new UsageError(`Unknown sandbox start option: ${args[0]}`);
+    if (vmSandbox && gvisor) throw new UsageError("sandbox start accepts either --vm or --gvisor, not both");
+    if (vmSandbox && cpu !== undefined) throw new UsageError("VM sandboxes use a fixed CPU profile; --cpu selects the gVisor runtime");
     if (vmSandbox && !idempotencyKey) throw new UsageError("sandbox start --vm requires --idempotency-key; save and reuse it with the same options on retry");
-    const sandbox = await client.start(id, { cpu, vmSandbox, idempotencyKey, name });
+    let sandbox = await client.start(id, {
+      cpu,
+      vmSandbox,
+      gvisor: gvisor || cpu !== undefined,
+      idempotencyKey,
+      name,
+    });
+    if (sandbox.state === "pending" && !noWait) {
+      write(io.stderr, `Sandbox ${sandbox.id} is pending; waiting up to ${SANDBOX_READY_TIMEOUT_MS / 1000} seconds for running...\n`);
+      const outcome = await awaitRunning(client, sandbox.id, sleep, now);
+      sandbox = outcome.sandbox;
+      emit(io, json, { sandbox }, sandboxLine(sandbox));
+      if (sandbox.state === "expired") {
+        write(io.stderr, `Sandbox ${sandbox.id} expired before reaching running.\n`);
+        return 1;
+      }
+      if (outcome.timedOut) {
+        write(io.stderr, `Sandbox ${sandbox.id} is still ${sandbox.state}. Check later with 'bxc sandbox status ${sandbox.id}'.\n`);
+        return 1;
+      }
+      return 0;
+    }
     emit(io, json, { sandbox }, sandboxLine(sandbox));
-    if (vmSandbox) write(io.stderr, "Creation receipt only. Save the sandbox ID; use sandbox status to confirm vmSandbox=true and running. Reuse the same key and options on retry.\n");
+    if (sandbox.state === "pending") write(io.stderr, "Creation receipt only. Save the sandbox ID; use sandbox status to confirm readiness. Reuse the same key and options on retry.\n");
     return 0;
   }
   if (action === "upload" || action === "download") {

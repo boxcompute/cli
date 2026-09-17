@@ -132,9 +132,12 @@ export class BoxComputeClient {
   async start(workspaceId: string, input: {
     cpu?: number;
     vmSandbox?: boolean;
+    gvisor?: boolean;
     idempotencyKey?: string;
     name?: string;
   } = {}): Promise<Sandbox> {
+    if (input.vmSandbox && input.gvisor) throw new Error("VM and gVisor selection are mutually exclusive");
+    if (input.vmSandbox && input.cpu !== undefined) throw new Error("VM sandboxes use a fixed CPU profile; --cpu selects the gVisor runtime");
     if (input.vmSandbox && !input.idempotencyKey) throw new Error("VM creation requires --idempotency-key; reuse the same key and options on retry");
     if (input.idempotencyKey !== undefined && !/^[\x21-\x7e]{1,255}$/.test(input.idempotencyKey)) {
       throw new Error("Idempotency key must contain 1–255 visible ASCII characters without spaces");
@@ -150,7 +153,7 @@ export class BoxComputeClient {
       body: JSON.stringify({
         workspaceId,
         ...(input.cpu !== undefined ? { cpu: input.cpu } : {}),
-        ...(input.vmSandbox ? { vmSandbox: true } : {}),
+        ...(input.gvisor ? { vmSandbox: false } : input.vmSandbox ? { vmSandbox: true } : {}),
         ...(name !== undefined ? { name } : {}),
       }),
       signal: AbortSignal.timeout(30_000),

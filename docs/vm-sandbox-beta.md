@@ -1,40 +1,42 @@
-# Test tools in a VM sandbox (Beta)
+# Test tools in a VM sandbox
 
 Create a VM, upload test data, run a command, download the results, and delete
 the VM using the BoxCompute API. This guide is for developers building short,
-offline integration tests for command-line tools and agent tool execution.
+bounded integration tests for command-line tools and agent tool execution.
 
-**Access is by approval only.** Contact BoxCompute to confirm your account's
-VM beta access before starting. This beta is not intended for production
-workloads, Internet-connected tools, or always-on services.
+**Access:** any authenticated BoxCompute account can create VM sandboxes; no
+separate approval is required. This profile is not intended for production
+workloads or always-on services, and active VMs bill until you delete them.
 
-**CLI support:** CLI 0.4.0 or newer supports VM creation with `--vm`, plus
-`upload` and `download`. The [CLI walkthrough](#cli-walkthrough-040-or-newer)
+**CLI support:** CLI 0.4.0 or newer creates VMs by default — `bxc sandbox start`
+omits the runtime selector and waits up to 180 seconds for `running` — plus
+`upload` and `download`. Use `--vm --idempotency-key KEY` for an explicit VM
+create with your own retry key, `--no-wait` for the receipt only, and
+`--gvisor` for a container sandbox instead. The [CLI walkthrough](#cli-walkthrough-040-or-newer)
 uses browser login and the CLI's saved credential. The direct API walkthrough
 uses a separately loaded account API key; do not extract the CLI's credential.
-Without `--vm`, `bxc sandbox start` creates an ordinary sandbox. Experimental
-Tailcat SSH does not apply to this restricted VM beta.
+Experimental Tailcat SSH does not apply to VM sandboxes.
 
 The walkthrough uses a small text fixture and requires no additional software
 inside the VM. The [Hermes section](#evaluating-hermes-agent) explains what you
 can investigate for an agent integration and what is not supported yet.
 
-Last updated: September 13, 2026. VM beta contract supplied September 12, 2026.
+Last updated: September 17, 2026. VM contract updated September 17, 2026.
 
 ## Check whether your experiment fits
 
-| Capability | Current restricted VM profile |
+| Capability | Current VM profile |
 | --- | --- |
-| Availability | Approved accounts only. An API key does not by itself grant VM beta access. |
-| Selection | `vmSandbox: true`; omitted/false selects the ordinary non-VM path. Rejected VM requests do not fall back to that path. |
-| Resources | Fixed 500m CPU (0.5 CPU), 1,024 MiB RAM, 256 MiB workspace. No public sizing controls. |
-| Lifetime | 10 minutes (600 seconds) from VM allocation, including boot time. Activity does not extend it. |
+| Availability | Any authenticated account. No separate VM approval. |
+| Selection | Omitted `vmSandbox` selects the VM runtime (the default); `vmSandbox: false` explicitly selects a gVisor container sandbox. Rejected VM requests do not fall back to that path. |
+| Resources | Fixed 500m CPU (0.5 CPU), 1,024 MiB RAM, 10 GiB workspace. No public sizing controls. |
+| Lifetime | No automatic expiry. The VM exists, and bills for active use, until you delete it. |
 | Image | Immutable, server-selected approved minimal Ubuntu image. No arbitrary image override, library profile, or attached volumes. |
 | User/runtime | Unprivileged user; `HOME=/workspace`. No sudo/root installation or SSH login. Check that your required executables are available; Node.js, uv and your tool's dependencies are not guaranteed. |
-| Networking | No external network access from the VM. You can call the BoxCompute API from your own machine to run commands and transfer files. |
+| Networking | Outbound Internet access by default; request `blockNetwork: true` at create for a VM with no NIC. No inbound exposure either way. |
 | Serving | No supported public inbound port, SSH endpoint, application tunnel, or webhook URL. Binding a guest port does not publish it. |
-| Storage | `/workspace` is temporary storage for this VM. Download needed data before expiry. An account workspace groups sandboxes; it does not preserve their files. |
-| Lifecycle | Create, status, execute, files, expiry, delete. Do not depend on sleep/resume, snapshots, checkpoints, forks, or restore for this VM profile. |
+| Storage | `/workspace` is storage for this VM. Download needed data before deleting it. An account workspace groups sandboxes; it does not preserve their files. |
+| Lifecycle | Create, status, execute, files, delete. Do not depend on sleep/resume, snapshots, checkpoints, forks, or restore for this VM profile. |
 
 Start with a small payload and one command at a time. A full toolchain, browser,
 model or concurrent agent workload may exceed the available resources.
@@ -51,8 +53,7 @@ bxc doctor
 bxc --json workspaces
 ```
 
-Select an owned workspace deliberately and set its ID below. VM beta approval
-is separate from login and API-key scopes. If you need a new workspace, create
+Select an owned workspace deliberately and set its ID below. If you need a new workspace, create
 one in BoxCompute or use the optional workspace API request later in this guide.
 Run these steps in the same shell in a new local test directory.
 
@@ -63,15 +64,16 @@ Keep the workspace ID and optional name unchanged when retrying:
 
 ```bash
 WORKSPACE_ID='REPLACE_WITH_OWNED_WORKSPACE_ID'
-CREATE_KEY="vm-$(node -e 'console.log(crypto.randomUUID())')"
-printf '%s\n' "$CREATE_KEY" > vm-create-key.txt
-bxc --json sandbox start "$WORKSPACE_ID" --vm --idempotency-key "$CREATE_KEY" \
-  > vm-create-response.json
+# Default runtime (VM). Start waits up to 180 seconds for running and
+# reports the sandbox and its state either way.
+bxc --json sandbox start "$WORKSPACE_ID" > vm-create-response.json
 ```
 
-Start makes one request with a 30-second timeout. It returns a creation receipt,
-which can be `pending`; successful CLI exit does not prove readiness. After a
-successful response, save the returned sandbox ID separately:
+For an explicit VM create with your own retry key, add
+`--vm --idempotency-key "$CREATE_KEY"` (generate and save the key once) and
+`--no-wait` to get the creation receipt immediately; the receipt can be
+`pending`, and a successful exit does not prove readiness. Either way, save the
+returned sandbox ID separately:
 
 ```bash
 SANDBOX_ID=$(jq -er '.sandbox.id | strings | select(length > 0)' vm-create-response.json)
@@ -81,13 +83,13 @@ jq -e '.sandbox.vmSandbox == true and .sandbox.state == "running"' vm-status.jso
 ```
 
 Continue only when the status check succeeds. For pending status, wait about
-10 seconds before checking again; stop after five minutes and delete the saved
-ID. Provisioning time uses the VM's fixed lifetime. If creation times out,
-retry only the `bxc sandbox start` command with the unchanged key and options;
-do not rerun key generation. The same request recovers the same ID. Completed
-receipts are retained for 24 hours and are not current status. Keep the saved ID
-even if a later replay fails. Neither start nor status automatically retries,
-waits for provisioning, or allocates a replacement VM.
+10 seconds before checking again; stop after five minutes and keep the saved
+ID for later. If creation times out, retry only the `bxc sandbox start`
+command with the unchanged key and options; do not rerun key generation. The
+same request recovers the same ID. Completed receipts are retained for 24
+hours and are not current status. Keep the saved ID even if a later replay
+fails. Neither start nor status retries failed requests or allocates a
+replacement VM.
 
 ### Upload, execute, and download
 
@@ -132,7 +134,7 @@ bxc sandbox delete "$SANDBOX_ID" --yes
 
 Deletion leaves the parent workspace and sibling sandboxes intact. An expired
 VM cannot be renewed by execution or file activity. Keep real model orchestration
-on your own networked host and dispatch only bounded offline work to the VM.
+on your own host and dispatch only bounded work to the VM.
 
 ## Before the direct API walkthrough
 
@@ -169,8 +171,8 @@ curl --fail-with-body -sS "$BASE/workspaces" \
 
 HTTP 200 returns `{"workspaces":[...]}`. Deliberately select an owned workspace;
 do not silently use the first result. Set `WORKSPACE_ID` to its returned `id`.
-The workspace must belong to your account, and that account must have VM beta
-access. You do not need a separate tenant ID or tenant header.
+The workspace must belong to your account. You do not need a separate tenant
+ID or tenant header.
 
 If you need a new workspace, run the following optional request. HTTP 201
 returns `{"workspace":{...}}`; use its `id` in the next step. Skip this request
@@ -236,13 +238,15 @@ If your shell closes, restore `CREATE_KEY` from `vm-create-key.txt`, keep
 `BASE` and `create_vm` function. Do not rerun the initialization block, which
 generates a new key. Restore any saved sandbox ID from `vm-sandbox-id.txt`.
 
-Only `workspaceId`, optional `name` (1–80 trimmed characters), and `vmSandbox`
-configure public creation. Unknown fields are currently discarded, not sizing
-or networking controls. Do not send `image`, `backend`, `cpu`, `memoryMiB`,
-`workspaceMiB`, `timeoutSeconds`, `blockNetwork`, `libraries`, or `volumes`.
+Only `workspaceId`, optional `name` (1–80 trimmed characters), `vmSandbox`,
+and `blockNetwork` (VM only; omitted means outbound Internet) configure public
+creation. Unknown fields are currently discarded, not sizing controls. Do
+not send `image`, `backend`, `cpu` (container sandboxes only), `memoryMiB`,
+`workspaceMiB`, `timeoutSeconds`, `libraries`, or `volumes`.
 
-VM creation requires `Idempotency-Key`: 1–255 visible ASCII characters, no
-spaces. Keys are account-wide across mutations. Changed normalized input or
+An explicit `vmSandbox:true` requires `Idempotency-Key`: 1–255 visible ASCII
+characters, no spaces. An omitted `vmSandbox` may be sent without one; the
+server then generates the key. Keys are account-wide across mutations. Changed normalized input or
 reuse for a different mutation gives `409 IDEMPOTENCY_CONFLICT`. Completed
 receipts are retained for 24 hours after completion. A replay is a saved
 creation receipt, not current status; even a deleted VM's receipt can replay.
@@ -281,7 +285,7 @@ shell, and interpolating untrusted inputs into shell text is unsafe.
 `cwd` defaults to `/workspace` and must stay there or below it. Optional `env`
 is a string map (up to 64 valid environment variable names). `argv` has 1–64
 nonempty entries, each at most 8,192 characters. Execution timeout accepts
-1–900 seconds (default 120); it cannot extend the 600-second VM lifetime.
+1–900 seconds (default 120).
 Output is bounded to 1–1,048,576 bytes (default 262,144). Start with short
 timeouts, small output and one task at a time. Execute is not idempotent:
 retrying after a lost response can run the work again.
@@ -347,8 +351,8 @@ not make a live database backup consistent.
 
 ### 5. Export early; delete explicitly
 
-Finish and download your results well before the 10-minute lifetime ends;
-boot delays reduce your usable time. Activity does not renew it. When an
+Download your results before deleting the VM. VMs have no automatic expiry,
+so an idle VM keeps billing until you delete it. When an
 execute or file request detects that the VM has expired, it returns
 `503 SANDBOX_UNAVAILABLE` and the sandbox is marked `expired`.
 Using that sandbox ID again does not automatically create a replacement VM.
@@ -375,8 +379,7 @@ Errors have shape `{"code":"...","error":"..."}`. Useful distinctions:
 `PAYLOAD_TOO_LARGE`; 415 `UNSUPPORTED_MEDIA_TYPE`; 502 `SERVICE_UNAVAILABLE`;
 503 `SANDBOX_UNAVAILABLE`.
 
-- For 401/403, check your key's status and scopes. VM beta approval is separate
-  from API-key scopes.
+- For 401/403, check your key's status and scopes.
 - For 402, check your account credit before retrying.
 - For 409 `IDEMPOTENCY_CONFLICT`, check whether you changed the request body or
   reused a key for another operation. Recover the original request first.
@@ -395,18 +398,18 @@ The authoritative [Hermes installation guide](https://hermes-agent.nousresearch.
 and [messaging gateway guide](https://hermes-agent.nousresearch.com/docs/user-guide/messaging)
 describe its installation and runtime requirements. Pin the Hermes version you
 investigate; those requirements can change. **Hermes is not preinstalled, and
-running Hermes end to end in this beta has not been verified.** Start with
-offline tool execution rather than trying to host the full agent.
+running Hermes end to end in this VM profile has not been verified.** Start with
+bounded tool execution rather than trying to host the full agent.
 
 | Hermes requirement | What developers can do here / blocker |
 | --- | --- |
-| Linux installer | Upstream requires Git, curl, xz-utils; it downloads code and dependencies including uv/Python 3.11, Node.js v26 (or accepted installed versions), ripgrep and ffmpeg. Blocked egress prevents that install flow. Do not run the online installer expecting success. |
-| Runtime and optional tools | Minimal Ubuntu is not a Hermes runtime image. Browser tooling additionally needs Chromium and OS libraries, some requiring administrator installation. No root install, custom image or library-profile request is available. Measure a small offline payload before attempting it; a full installation is not known to fit. |
-| Model/provider access | Nous Portal uses OAuth; other providers use their credentials/endpoints, including OpenAI-compatible services. Main and auxiliary model calls need connectivity. External models, OAuth, web tools and remote MCP/cloud backends are blocked. A provider key does not bypass networking. No local model service or GPU is supplied. |
+| Linux installer | Upstream requires Git, curl, xz-utils; it downloads code and dependencies including uv/Python 3.11, Node.js v26 (or accepted installed versions), ripgrep and ffmpeg. Outbound Internet is available by default, but the fixed 0.5 CPU / 1 GiB profile makes a full install unlikely to fit; measure a minimal payload before attempting it. |
+| Runtime and optional tools | Minimal Ubuntu is not a Hermes runtime image. Browser tooling additionally needs Chromium and OS libraries, some requiring administrator installation. No root install, custom image or library-profile request is available. Measure a small payload before attempting it; a full installation is not known to fit. |
+| Model/provider access | Nous Portal uses OAuth; other providers use their credentials/endpoints, including OpenAI-compatible services. Main and auxiliary model calls need outbound connectivity, which is available by default. Keep real provider credentials off the VM and out of fixtures; use synthetic or placeholder credentials for experiments. No local model service or GPU is supplied. |
 | Command backend | Hermes documents local, Docker, SSH and several cloud/container backends, not a built-in BoxCompute backend. If runtime prerequisites are independently satisfied, local execution would run inside this VM as its unprivileged user. Docker/SSH/cloud hosting assumptions do not transfer; any public-API adapter is developer work, not provided here. |
-| State | Hermes uses `~/.hermes` or `HERMES_HOME` for config, credentials, memory, skills, sessions, logs and SQLite `state.db`. A proposed `/workspace/hermes-home` is scratch only. Export synthetic test state before expiry; account workspace identity does not preserve it across VMs. |
+| State | Hermes uses `~/.hermes` or `HERMES_HOME` for config, credentials, memory, skills, sessions, logs and SQLite `state.db`. A proposed `/workspace/hermes-home` is scratch only. Export synthetic test state before deleting the VM; account workspace identity does not preserve it across VMs. |
 | SQLite storage | The VM workspace uses virtiofs, a shared filesystem. Hermes defaults to SQLite WAL and warns that some virtiofs setups need `database.journal_mode: delete`. SQLite behavior here has not been verified for Hermes. Test a fresh disposable database; do not copy a live WAL database or assume that changing config converts an existing one. |
-| Gateway, cron, dashboard | The gateway is a background service with persistent sessions and external platform connections; serving also needs a reachable endpoint. A 600-second blocked-network VM with no inbound publication cannot host long-running Hermes or its messaging/dashboard service. A user service cannot override the VM deadline. |
+| Gateway, cron, dashboard | The gateway is a background service with persistent sessions and external platform connections; serving also needs a reachable endpoint. A VM with no inbound publication cannot host long-running Hermes or its messaging/dashboard service, and an always-on VM bills until deleted. |
 
 Do not upload real Hermes `.env`, `auth.json`, private keys or personal session
 backups to start testing. Use synthetic state and placeholder credentials.
@@ -419,7 +422,7 @@ undocumented create fields or a workaround inside the guest.
 1. **API adapter contract tests:** implement your own client around the flow
    above. Record one create key/ID, pending-to-ready handling, stdout/stderr,
    file checksums and cleanup. Keep any real model orchestration on your own
-   networked development host; dispatch only bounded offline tool work to the
+   development host; dispatch only bounded tool work to the
    VM. This is an integration design to implement, not an existing Hermes plugin.
 2. **Offline tool fixtures:** upload a small script plus synthetic inputs; run
    it with an available interpreter or a compatible, developer-built standalone
@@ -429,7 +432,7 @@ undocumented create fields or a workaround inside the guest.
    Record missing dependencies as blockers rather than installing from the
    Internet or assuming packages are preinstalled.
 3. **Hermes component investigation:** outside the VM, identify a pinned
-   component and its transitive dependencies. Only if a small offline payload
+   component and its transitive dependencies. Only if a small payload
    fits, test configuration/state serialization or deterministic tool behavior
    without model access. For a loopback mock experiment, you supply both mock
    and client inside the VM and stop them within the test budget; this would

@@ -5,20 +5,25 @@ use the same notes and bind them to the exact source commit.
 
 ## [0.4.0] - 2026-09-13
 
-Create approval-only VM sandboxes and transfer files with the authenticated CLI.
+Create VM sandboxes (now the default runtime) and transfer files with the
+authenticated CLI.
 
 ### CLI users
 
-- Upgrade with `bxc update`. Use `sandbox start WORKSPACE_ID --vm
-  --idempotency-key KEY` to request a VM; keep the key and options unchanged on
-  retry. Start returns the creation receipt; use `sandbox status` for readiness.
+- Upgrade with `bxc update`. `sandbox start WORKSPACE_ID` uses the server's
+  default runtime (VM) and waits up to 180 seconds for a pending sandbox to
+  reach running, reporting the sandbox and its state either way.
+- `--gvisor` explicitly selects a container sandbox; `--cpu` implies it, since
+  only container sandboxes support CPU selection. `--vm` explicitly selects a
+  VM and still requires `--idempotency-key`, reused with the same options on
+  retry. `--no-wait` returns the creation receipt immediately.
 - `sandbox upload SANDBOX_ID LOCAL REMOTE` uploads up to 8 MiB of raw bytes.
   `sandbox download SANDBOX_ID REMOTE LOCAL` follows file cursors to EOF and
   creates a new local file only after the complete download succeeds.
 - Creation accepts optional `--name` and `--idempotency-key` for ordinary
   sandboxes too. Status supports `pending`, `expired`, and `vmSandbox`.
-- The bundled VM guide and agent skill cover offline tests, expiry, recovery,
-  cleanup, and Hermes limitations. VM beta access still requires approval.
+- The bundled VM guide and agent skill cover offline tests, recovery, cleanup,
+  and Hermes limitations. VM access no longer requires approval.
 
 ### Security
 

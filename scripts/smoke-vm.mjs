@@ -12,17 +12,30 @@ const { runCli } = await import(typeof packageRoot === "string"
 const root = await mkdtemp(join(tmpdir(), "bxc-vm-smoke-"));
 const bytes = Buffer.from([0, 255, 128, 10]);
 let uploaded;
+let defaultInspections = 0;
 const io = { stdout: new PassThrough(), stderr: new PassThrough() };
 const dependencies = {
-  io, env: {}, syncManagedSkills: async () => [],
+  io, env: {}, syncManagedSkills: async () => [], sleep: async () => {},
   loadConnection: async () => ({ url: "https://example.test", token: "test-token", tokenFile: "/unused" }),
   fetch: async (input, init) => {
     const url = new URL(input);
     assert.equal(new Headers(init.headers).get("authorization"), "Bearer test-token");
     if (init.method === "POST") {
-      assert.deepEqual(JSON.parse(init.body), { workspaceId: "ws_test", vmSandbox: true });
-      assert.equal(new Headers(init.headers).get("idempotency-key"), "saved-key");
-      return Response.json({ sandbox: { id: "sbx_vm", vmSandbox: true, state: "pending" } }, { status: 202 });
+      const body = JSON.parse(init.body);
+      if (body.vmSandbox === true) {
+        assert.deepEqual(body, { workspaceId: "ws_test", vmSandbox: true });
+        assert.equal(new Headers(init.headers).get("idempotency-key"), "saved-key");
+        return Response.json({ sandbox: { id: "sbx_vm", vmSandbox: true, state: "pending" } }, { status: 202 });
+      }
+      assert.deepEqual(body, { workspaceId: "ws_default" });
+      return Response.json({ sandbox: { id: "sbx_default", vmSandbox: true, state: "pending" } }, { status: 202 });
+    }
+    if (url.pathname.endsWith("/sandboxes/sbx_vm")) {
+      return Response.json({ sandbox: { id: "sbx_vm", vmSandbox: true, state: "running" } });
+    }
+    if (url.pathname.endsWith("/sandboxes/sbx_default")) {
+      defaultInspections += 1;
+      return Response.json({ sandbox: { id: "sbx_default", vmSandbox: true, state: defaultInspections >= 2 ? "running" : "pending" } });
     }
     if (init.method === "PUT") {
       assert.equal(url.searchParams.get("path"), "/workspace/binary");
@@ -44,7 +57,11 @@ const dependencies = {
 };
 try {
   assert.equal(await runCli(["--json", "sandbox", "start", "ws_test", "--vm", "--idempotency-key", "saved-key"], dependencies), 0);
-  assert.equal(JSON.parse(io.stdout.read().toString()).sandbox.state, "pending");
+  assert.equal(JSON.parse(io.stdout.read().toString()).sandbox.state, "running");
+  assert.equal(await runCli(["--json", "sandbox", "start", "ws_default"], dependencies), 0);
+  const defaulted = JSON.parse(io.stdout.read().toString()).sandbox;
+  assert.equal(defaulted.state, "running");
+  assert.equal(defaulted.vmSandbox, true);
   await writeFile(join(root, "input"), bytes);
   assert.equal(await runCli(["--json", "sandbox", "upload", "sbx_vm", join(root, "input"), "/workspace/binary"], dependencies), 0);
   assert.equal(JSON.parse(io.stdout.read().toString()).bytes, 4);

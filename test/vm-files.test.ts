@@ -89,10 +89,84 @@ describe("VM creation", () => {
     };
     await expect(runCli(["sandbox", "start", "ws_one", "--vm"], dependencies)).rejects.toThrow("--idempotency-key");
     expect(calls).toBe(0);
-    expect(await runCli(["--json", "sandbox", "start", "ws_one", "--vm", "--idempotency-key", "key"], dependencies)).toBe(0);
+    expect(await runCli(["--json", "sandbox", "start", "ws_one", "--vm", "--idempotency-key", "key", "--no-wait"], dependencies)).toBe(0);
     expect(JSON.parse(io.stdout.read().toString()).sandbox.state).toBe("pending");
     expect(await runCli(["--json", "sandbox", "status", "sbx_vm"], dependencies)).toBe(0);
     expect(JSON.parse(io.stdout.read().toString()).sandbox.state).toBe("expired");
+  });
+
+  it("waits for a defaulted pending sandbox to reach running", async () => {
+    const io = { stdout: new PassThrough(), stderr: new PassThrough() };
+    const states = ["pending", "pending", "running"];
+    const bodies: unknown[] = [];
+    const dependencies = {
+      io, env: {}, loadConnection: async () => connection, syncManagedSkills: async () => [],
+      sleep: async () => {},
+      fetch: (async (_: unknown, init?: RequestInit) => {
+        if (init?.method === "POST") {
+          bodies.push(JSON.parse(String(init.body)));
+          return json({ sandbox: { id: "sbx_default", vmSandbox: true, state: "pending" } }, 202);
+        }
+        return json({ sandbox: { id: "sbx_default", vmSandbox: true, state: states.shift() ?? "running" } });
+      }) as typeof fetch,
+    };
+    expect(await runCli(["--json", "sandbox", "start", "ws_one"], dependencies)).toBe(0);
+    expect(bodies).toEqual([{ workspaceId: "ws_one" }]);
+    expect(JSON.parse(io.stdout.read().toString()).sandbox.state).toBe("running");
+    expect(io.stderr.read().toString()).toContain("waiting up to 180 seconds");
+  });
+
+  it("reports a defaulted sandbox that expires while waiting", async () => {
+    const io = { stdout: new PassThrough(), stderr: new PassThrough() };
+    const dependencies = {
+      io, env: {}, loadConnection: async () => connection, syncManagedSkills: async () => [],
+      sleep: async () => {},
+      fetch: (async (_: unknown, init?: RequestInit) => {
+        if (init?.method === "POST") return json({ sandbox: { id: "sbx_gone", vmSandbox: true, state: "pending" } }, 202);
+        return json({ sandbox: { id: "sbx_gone", vmSandbox: true, state: "expired" } });
+      }) as typeof fetch,
+    };
+    expect(await runCli(["--json", "sandbox", "start", "ws_one"], dependencies)).toBe(1);
+    expect(JSON.parse(io.stdout.read().toString()).sandbox.state).toBe("expired");
+    expect(io.stderr.read().toString()).toContain("expired before reaching running");
+  });
+
+  it("stops waiting after the readiness bound and keeps the receipt", async () => {
+    const io = { stdout: new PassThrough(), stderr: new PassThrough() };
+    let clock = 0;
+    const dependencies = {
+      io, env: {}, loadConnection: async () => connection, syncManagedSkills: async () => [],
+      sleep: async () => { clock += 60_000; },
+      now: () => clock,
+      fetch: (async (_: unknown, init?: RequestInit) => {
+        if (init?.method === "POST") return json({ sandbox: { id: "sbx_slow", vmSandbox: true, state: "pending" } }, 202);
+        return json({ sandbox: { id: "sbx_slow", vmSandbox: true, state: "pending" } });
+      }) as typeof fetch,
+    };
+    expect(await runCli(["--json", "sandbox", "start", "ws_one"], dependencies)).toBe(1);
+    expect(JSON.parse(io.stdout.read().toString()).sandbox.state).toBe("pending");
+    expect(io.stderr.read().toString()).toContain("bxc sandbox status sbx_slow");
+  });
+
+  it("sends an explicit gVisor opt-out and rejects conflicting runtime flags", async () => {
+    const io = { stdout: new PassThrough(), stderr: new PassThrough() };
+    const bodies: unknown[] = [];
+    const dependencies = {
+      io, env: {}, loadConnection: async () => connection, syncManagedSkills: async () => [],
+      fetch: (async (_: unknown, init?: RequestInit) => {
+        if (init?.method === "POST") {
+          bodies.push(JSON.parse(String(init.body)));
+          return json({ sandbox: { id: "sbx_container", vmSandbox: false, state: "running" } }, 201);
+        }
+        throw new Error("should not inspect");
+      }) as typeof fetch,
+    };
+    expect(await runCli(["sandbox", "start", "ws_one", "--gvisor"], dependencies)).toBe(0);
+    expect(bodies).toEqual([{ workspaceId: "ws_one", vmSandbox: false }]);
+    await expect(runCli(["sandbox", "start", "ws_one", "--vm", "--gvisor", "--idempotency-key", "k"], dependencies))
+      .rejects.toThrow("either --vm or --gvisor");
+    await expect(runCli(["sandbox", "start", "ws_one", "--vm", "--cpu", "1", "--idempotency-key", "k"], dependencies))
+      .rejects.toThrow("fixed CPU profile");
   });
 });
 
