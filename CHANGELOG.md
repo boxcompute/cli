@@ -3,6 +3,27 @@
 This file records user-visible changes to the BoxCompute CLI. GitHub Releases
 use the same notes and bind them to the exact source commit.
 
+## [0.6.0] - 2026-09-20
+
+Forward selected TCP services from an owned running VM to local loopback.
+
+### CLI users
+
+- Run `bxc sandbox expose SANDBOX_ID --port 3000` to make the VM's port 3000
+  available at `127.0.0.1:3000`. Use `--port 8080:80` to map a different local
+  port, and repeat `--port` for up to eight services.
+- The command stays in the foreground for the fixed five-minute lease. Press
+  Ctrl+C to close it sooner; run the command again when a fresh lease is needed.
+
+### Security
+
+- Local listeners bind only IPv4 loopback. Each grant is tied to the caller,
+  the exact owned VM boot, one native client key, and the explicitly selected
+  ports. Creation is never retried or renewed.
+- The helper and local listeners stop on parent exit and fixed expiry. The CLI
+  attempts revocation on exit and clearly distinguishes an untrusted VM guest
+  report from independent physical-cleanup evidence.
+
 ## [0.5.0] - 2026-09-17
 
 Choose a larger VM profile with `bxc sandbox start --size small|large`.

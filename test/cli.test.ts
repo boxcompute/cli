@@ -1,6 +1,6 @@
 import { PassThrough } from "node:stream";
 import { describe, expect, it } from "bun:test";
-import { browserLaunch, openBrowser, runCli } from "../src/cli.js";
+import { browserLaunch, openBrowser, runCli, serviceMappings } from "../src/cli.js";
 
 function streams() {
   return { stdout: new PassThrough(), stderr: new PassThrough() };
@@ -14,6 +14,38 @@ function output(stream: PassThrough): string {
 }
 
 describe("bxc CLI", () => {
+  it("parses selected service ports without permitting duplicate listeners or targets", () => {
+    const values = ["--port", "3000", "--port", "8080:80"];
+    expect(serviceMappings(values)).toEqual([{ local: 3000, remote: 3000 }, { local: 8080, remote: 80 }]);
+    expect(values).toEqual([]);
+    expect(() => serviceMappings(["--port", "3000", "--port", "3000:80"])).toThrow("Local ports must be unique");
+    expect(() => serviceMappings(["--port", "3000:80", "--port", "8080:80"])).toThrow("Remote ports must be unique");
+    expect(() => serviceMappings(["--port", "0"])).toThrow("1 to 65535");
+  });
+
+  it("keeps expose in the foreground and reports loopback mappings", async () => {
+    const io = streams();
+    const observed: unknown[] = [];
+    expect(await runCli(["sandbox", "expose", "sbx_one", "--port", "3000", "--port", "8080:80"], {
+      io,
+      env: {},
+      loadConnection: async () => ({ url: "https://app.boxcompute.ai", token: "bc_live_test", tokenFile: "/credential" }),
+      syncManagedSkills: async () => [],
+      openServices: async (_client, id, mappings, signal) => {
+        observed.push(id, mappings, signal?.aborted);
+        return {
+          generationId: "12345678-1234-4123-8123-123456789abc",
+          expiresAt: 1_800_000_300,
+          closed: Promise.resolve("untrusted-guest-report" as const),
+          close: async () => "untrusted-guest-report" as const,
+        };
+      },
+    })).toBe(0);
+    expect(observed).toEqual(["sbx_one", [{ local: 3000, remote: 3000 }, { local: 8080, remote: 80 }], false]);
+    expect(output(io.stdout)).toBe("127.0.0.1:3000 -> sbx_one:3000\n127.0.0.1:8080 -> sbx_one:80\n");
+    expect(output(io.stderr)).toContain("fixed lease will still expire");
+  });
+
   it("updates to a newer npm release without requiring authentication", async () => {
     const io = streams();
     const installed: string[] = [];

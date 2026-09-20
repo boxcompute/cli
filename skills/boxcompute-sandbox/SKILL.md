@@ -53,6 +53,17 @@ Stop writers before downloading state. For disposable VM tests, export early
 and delete with `bxc sandbox delete SANDBOX_ID --yes`, including on test failure
 or expiry. Ordinary Sandbox persistence guidance below does not apply to VMs.
 
+To let the user reach a TCP service in a running VM, start the server as a
+durable remote process, then have the user run this foreground command locally:
+
+```sh
+bxc sandbox expose SANDBOX_ID --port 3000
+```
+
+Use `--port LOCAL:REMOTE` when the local port differs, and repeat it for up to
+eight services. The listener is local IPv4 loopback only, expires after five
+minutes, never renews, and attempts revocation on exit. It is not a public URL.
+
 ## Execute work
 
 Prefer argument-vector execution, which avoids a local shell:

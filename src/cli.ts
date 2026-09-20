@@ -31,6 +31,7 @@ import {
   type AgentTarget,
   type HarnessDetection,
 } from "./skill.js";
+import { openServices, type ServiceMapping } from "./services.js";
 
 const DEFAULT_URL = "https://app.boxcompute.ai";
 const CLI_VERSION = (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version;
@@ -54,6 +55,7 @@ Commands:
     status                        Inspect one sandbox
     logs                          Read current or retained sandbox logs
     exec                          Execute a program inside a sandbox
+    expose                        Forward selected TCP ports to local loopback
     upload                        Upload a local file (up to 8 MiB)
     download                      Download a complete file to a new local path
     delete                        [alias: rm] Destroy the runtime; the workspace remains
@@ -87,6 +89,7 @@ Examples:
   $ bxc sandbox start WORKSPACE_ID --size large --idempotency-key SAVED_UNIQUE_KEY
   $ bxc sandbox logs SANDBOX_ID --source execute
   $ bxc sandbox exec SANDBOX_ID -- python -m pytest
+  $ bxc sandbox expose SANDBOX_ID --port 3000
 
 Compatibility:
 
@@ -104,6 +107,8 @@ Commands:
   logs SANDBOX_ID [options]       Read logs without starting the runtime
   exec SANDBOX_ID [options] -- PROGRAM [ARG...]
                                   Execute a program inside a sandbox
+  expose SANDBOX_ID --port [LOCAL:]REMOTE
+                                  Forward up to 8 TCP ports to 127.0.0.1
   delete SANDBOX_ID --yes         [alias: rm] Destroy the runtime; keep the workspace
   upload SANDBOX_ID LOCAL REMOTE  Upload raw bytes under /workspace (up to 8 MiB)
   download SANDBOX_ID REMOTE LOCAL
@@ -129,6 +134,14 @@ Start options:
   reports its state either way. No automatic retries or replacement VMs.
   Transfers never retry; downloads stop after five minutes and discard partial
   output on failure.
+
+Expose options:
+
+  --port [LOCAL:]REMOTE           Repeat for up to 8 unique ports. The local
+                                  port defaults to the remote port.
+
+  Expose binds only 127.0.0.1, lasts at most five minutes, never renews, and
+  attempts to revoke the grant when it exits. Run it again for a new lease.
 
 Exec options:
 
@@ -200,6 +213,7 @@ export type CliDependencies = {
   removeSkill?: typeof removeSkill;
   readSkill?: typeof readSkill;
   syncManagedSkills?: typeof syncManagedSkills;
+  openServices?: typeof openServices;
 };
 
 class UsageError extends Error {
@@ -366,6 +380,27 @@ function positive(value: string | undefined, name: string): number | undefined {
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new UsageError(`${name} must be a positive integer`);
   return parsed;
+}
+
+export function serviceMappings(tokens: string[]): ServiceMapping[] {
+  const mappings: ServiceMapping[] = [];
+  while (tokens.includes("--port")) {
+    const raw = option(tokens, "port")!;
+    const parts = raw.split(":");
+    if (parts.length > 2 || parts.some(part => !/^\d+$/.test(part))) {
+      throw new UsageError("--port must be REMOTE or LOCAL:REMOTE");
+    }
+    const local = Number(parts[0]);
+    const remote = Number(parts.length === 1 ? parts[0] : parts[1]);
+    if (![local, remote].every(port => Number.isSafeInteger(port) && port >= 1 && port <= 65_535)) {
+      throw new UsageError("--port values must be integers from 1 to 65535");
+    }
+    mappings.push({ local, remote });
+  }
+  if (mappings.length < 1 || mappings.length > 8) throw new UsageError("sandbox expose requires 1 to 8 --port options");
+  if (new Set(mappings.map(mapping => mapping.local)).size !== mappings.length) throw new UsageError("Local ports must be unique");
+  if (new Set(mappings.map(mapping => mapping.remote)).size !== mappings.length) throw new UsageError("Remote ports must be unique");
+  return mappings;
 }
 
 function schedulerCpu(value: string | undefined): number | undefined {
@@ -544,6 +579,7 @@ export async function runCli(argv: string[], supplied: CliDependencies = {}): Pr
   const remove = supplied.removeSkill ?? removeSkill;
   const skillText = supplied.readSkill ?? readSkill;
   const syncSkills = supplied.syncManagedSkills ?? syncManagedSkills;
+  const expose = supplied.openServices ?? openServices;
   const args = [...argv];
   const json = globalFlag(args, "--json");
   const versionRequested = args[0] === "version" || globalFlag(args, "--version", "-V", "-v");
@@ -778,6 +814,30 @@ export async function runCli(argv: string[], supplied: CliDependencies = {}): Pr
     if (since && until && since >= until) throw new UsageError("--since must be earlier than --until");
     if (args.length) throw new UsageError(`Unknown sandbox logs option: ${args[0]}`);
     return logsOutput(io, json, await client.logs(id, { since, until, stream, source, limit }));
+  }
+  if (action === "expose") {
+    if (json) throw new UsageError("sandbox expose is a foreground stream and does not support --json");
+    const mappings = serviceMappings(args);
+    if (args.length) throw new UsageError(`Unknown sandbox expose option: ${args[0]}`);
+    const abort = new AbortController();
+    const stop = () => abort.abort();
+    const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+    for (const signal of signals) process.on(signal, stop);
+    try {
+      const handle = await expose(client, id, mappings, abort.signal);
+      for (const mapping of mappings) {
+        write(io.stdout, `127.0.0.1:${mapping.local} -> ${id}:${mapping.remote}\n`);
+      }
+      write(io.stderr, `Service access expires at ${new Date(handle.expiresAt * 1_000).toISOString()}; press Ctrl+C to close it sooner.\n`);
+      const cleanup = await handle.closed;
+      if (cleanup === "untrusted-guest-report") {
+        write(io.stderr, "Local forwarding is closed; VM revoke was reported by the guest and the fixed lease will still expire.\n");
+      }
+      return 0;
+    } finally {
+      abort.abort();
+      for (const signal of signals) process.off(signal, stop);
+    }
   }
   if (action === "delete") {
     if (!flag(args, "yes") || args.length) throw new UsageError("sandbox delete requires SANDBOX_ID --yes");

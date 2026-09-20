@@ -52,6 +52,8 @@ bxc sandbox start WORKSPACE_ID --cpu 2
 # Use the returned sandbox instance ID for later commands.
 bxc sandbox logs SANDBOX_ID --source execute
 bxc sandbox exec SANDBOX_ID -- python -m pytest
+# Forward VM port 3000 to local loopback for up to five minutes.
+bxc sandbox expose SANDBOX_ID --port 3000
 ```
 
 When `--cpu` is omitted, BoxCompute uses the server's default scheduler CPU
@@ -86,6 +88,20 @@ gVisor runtime ignores `small` and rejects `large`. VMs have outbound Internet
 access by default, no automatic lifetime expiry, and no SSH access; delete them
 when done because active VMs keep billing. Uploads are limited to 8 MiB;
 downloads read to EOF and refuse to overwrite local files.
+
+To reach a TCP service running inside a network-enabled VM, keep a foreground
+tunnel open locally:
+
+```sh
+# 127.0.0.1:3000 -> VM port 3000
+bxc sandbox expose SANDBOX_ID --port 3000
+# 127.0.0.1:8080 -> VM port 80, plus a second unchanged mapping
+bxc sandbox expose SANDBOX_ID --port 8080:80 --port 5432
+```
+
+Only `127.0.0.1` is bound. A tunnel selects at most eight unique TCP ports,
+expires after five minutes, never renews automatically, and attempts revocation
+when the command exits. It does not create a public URL or expose UDP.
 
 Run `bxc` or `bxc --help` for the complete command reference. The previous
 `bcompute` executable remains available as a compatibility alias.
