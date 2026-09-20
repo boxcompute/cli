@@ -70,6 +70,22 @@ export type SandboxLogs = {
   retention_seconds: number;
 };
 
+export type ServiceAccessRequest = {
+  operation_id: string;
+  requested_at: number;
+  client_key: string;
+  recipient_key: string;
+  ports: number[];
+};
+
+export type ServiceAccessResponse = {
+  generation_id: string;
+  expires_at: number;
+  sealed: string;
+};
+
+export type ServiceCleanup = "guardian-confirmed" | "untrusted-guest-report";
+
 export class BoxComputeHttpError extends Error {
   constructor(readonly status: number, message: string, readonly code?: string) {
     super(message);
@@ -258,6 +274,93 @@ export class BoxComputeClient {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(input),
     })).result;
+  }
+
+  private async serviceAccess(
+    id: string,
+    action: "create" | "lookup" | "revoke",
+    request?: ServiceAccessRequest,
+    generation?: string,
+  ): Promise<ServiceAccessResponse | { generation_id: string; cleanup: ServiceCleanup }> {
+    const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
+    const unavailable = () => new Error("Service access unavailable; no mutation retry was attempted. Any unconfirmed access expires at its original deadline.");
+    try {
+      if (!/^sbx_[a-zA-Z0-9_-]+$/.test(id)) throw unavailable();
+      if (action === "revoke") {
+        if (!uuid.test(generation ?? "")) throw unavailable();
+      } else {
+        const now = Math.floor(Date.now() / 1000);
+        if (!request || Object.keys(request).sort().join() !== "client_key,operation_id,ports,recipient_key,requested_at"
+          || !uuid.test(request.operation_id) || !Number.isSafeInteger(request.requested_at)
+          || request.requested_at <= 0 || request.requested_at > now || now - request.requested_at >= 300
+          || !/^nodekey:(?!0{64}$)[a-f0-9]{64}$/.test(request.client_key)
+          || Buffer.from(request.recipient_key, "base64").length !== 32
+          || Buffer.from(request.recipient_key, "base64").toString("base64") !== request.recipient_key
+          || request.ports.length < 1 || request.ports.length > 8
+          || request.ports.some((port, index) => !Number.isInteger(port) || port < 1 || port > 65535
+            || (index > 0 && port <= request.ports[index - 1]!))) throw unavailable();
+      }
+      const base = `/api/v2/sandboxes/${encodeURIComponent(id)}/services`;
+      const { operation_id, ...body } = request ?? {};
+      const response = await this.fetchImpl(new URL(
+        action === "create" ? base : action === "lookup" ? `${base}/lookup` : `${base}/${encodeURIComponent(generation!)}`,
+        `${this.connection.url}/`,
+      ), {
+        method: action === "revoke" ? "DELETE" : "POST",
+        headers: {
+          authorization: `Bearer ${this.connection.token}`,
+          ...(request ? { "content-type": "application/json", "idempotency-key": operation_id! } : {}),
+        },
+        ...(request ? { body: JSON.stringify(body) } : {}),
+        redirect: "error",
+        signal: AbortSignal.timeout(action === "create" ? 45_000 : 25_000),
+      });
+      if (!response.ok || !response.body) {
+        await response.body?.cancel().catch(() => undefined);
+        throw unavailable();
+      }
+      const reader = response.body.getReader();
+      const chunks: Uint8Array[] = [];
+      let length = 0;
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          length += value.byteLength;
+          if (length > 16_384) throw unavailable();
+          chunks.push(value);
+        }
+      } finally {
+        await reader.cancel().catch(() => undefined);
+        reader.releaseLock();
+      }
+      const value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks))) as Record<string, unknown>;
+      if (action === "revoke") {
+        if (Object.keys(value).sort().join() !== "cleanup,generation_id" || value.generation_id !== generation
+          || (value.cleanup !== "guardian-confirmed" && value.cleanup !== "untrusted-guest-report")) throw unavailable();
+        return value as { generation_id: string; cleanup: ServiceCleanup };
+      }
+      if (Object.keys(value).sort().join() !== "expires_at,generation_id,sealed"
+        || typeof value.generation_id !== "string" || !uuid.test(value.generation_id)
+        || value.expires_at !== request!.requested_at + 300 || Number(value.expires_at) <= Math.floor(Date.now() / 1000)
+        || typeof value.sealed !== "string" || value.sealed.length < 80 || value.sealed.length > 16_000
+        || Buffer.from(value.sealed, "base64").toString("base64") !== value.sealed) throw unavailable();
+      return value as ServiceAccessResponse;
+    } catch {
+      throw unavailable();
+    }
+  }
+
+  async createServiceAccess(id: string, request: ServiceAccessRequest): Promise<ServiceAccessResponse> {
+    return await this.serviceAccess(id, "create", request) as ServiceAccessResponse;
+  }
+
+  async lookupServiceAccess(id: string, request: ServiceAccessRequest): Promise<ServiceAccessResponse> {
+    return await this.serviceAccess(id, "lookup", request) as ServiceAccessResponse;
+  }
+
+  async revokeServiceAccess(id: string, generation: string): Promise<ServiceCleanup> {
+    return (await this.serviceAccess(id, "revoke", undefined, generation) as { cleanup: ServiceCleanup }).cleanup;
   }
 
   async logs(id: string, input: {
