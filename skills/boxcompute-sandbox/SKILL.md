@@ -53,6 +53,17 @@ Stop writers before downloading state. For disposable VM tests, export early
 and delete with `bxc sandbox delete SANDBOX_ID --yes`, including on test failure
 or expiry. Ordinary Sandbox persistence guidance below does not apply to VMs.
 
+To let the user reach a TCP service in a running VM, start the server as a
+durable remote process, then have the user run this foreground command locally:
+
+```sh
+bxc sandbox expose SANDBOX_ID --port 3000
+```
+
+Use `--port LOCAL:REMOTE` when the local port differs, and repeat it for up to
+eight services. The listener is local IPv4 loopback only, expires after five
+minutes, never renews, and attempts revocation on exit. It is not a public URL.
+
 ## Execute work
 
 Prefer argument-vector execution, which avoids a local shell:
@@ -71,6 +82,22 @@ Use `--json` when inspecting results programmatically. A non-zero command exit
 is task evidence, not a reason to repeat blindly: read stdout/stderr, correct
 the cause, and then run the revised command. Never send local secrets into the
 sandbox unless the user explicitly places those secrets in scope.
+
+## Experimental SSH transport
+
+Use `bxc sandbox exec` for normal agent work. Only use the experimental SSH
+transport when the user explicitly asks for SSH or for testing the Tailcat
+connection path, and only with an already running operator-enabled sandbox:
+
+```sh
+BOXCOMPUTE_ENABLE_SSH=1 bxc sandbox ssh SANDBOX_ID
+```
+
+The non-PTY lease lasts at most 30 seconds and cleanup is best-effort. Do not
+present it as a persistent shell, arbitrary tunnel, or proof of immediate
+server-side revocation. If the CLI reports an uncertain revoke, preserve its
+endpoint ID and use the printed `--revoke` command only after inspecting owner
+state. Never retry activation automatically.
 
 ## Lifecycle and safety
 

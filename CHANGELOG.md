@@ -3,6 +3,34 @@
 This file records user-visible changes to the BoxCompute CLI. GitHub Releases
 use the same notes and bind them to the exact source commit.
 
+## [0.7.0] - 2026-09-21
+
+Forward owned VM services to local loopback and open experimental cooperative SSH.
+
+### CLI users
+
+- Run `bxc sandbox expose SANDBOX_ID --port 3000` to make the VM's port 3000
+  available at `127.0.0.1:3000`. Use `--port 8080:80` to map a different local
+  port, and repeat `--port` for up to eight services.
+- The expose command stays in the foreground for the fixed five-minute lease.
+  Press Ctrl+C to close it sooner; run the command again when a fresh lease is
+  needed.
+- Set `BOXCOMPUTE_ENABLE_SSH=1`, then run `bxc sandbox ssh SANDBOX_ID` on Linux
+  or macOS (x64 or arm64) for a short-lived, non-PTY SSH session.
+- `--reconnect` exercises one same-envelope reconnect. `--revoke ENDPOINT_ID`
+  requests best-effort cleanup after an uncertain client exit.
+
+### Security
+
+- Local listeners bind only IPv4 loopback. Each service grant is tied to the
+  caller, the exact owned VM boot, one native client key, and the explicitly
+  selected ports. Creation is never retried or renewed.
+- Cooperative SSH mutations are never retried, redirects are rejected, response
+  bodies are bounded, and local private material is kept in owner-only
+  temporary files and removed after the session.
+- The npm package includes client-only native binaries for Linux and macOS on
+  x64 and arm64.
+
 ## [0.6.0] - 2026-09-21
 
 The CLI now drives the public API through the official `@boxcompute/sdk`
