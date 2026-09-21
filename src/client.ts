@@ -54,6 +54,20 @@ export type Execution = {
   wallTimeSeconds: number;
 };
 
+export type ServiceAccessRequest = {
+  operation_id: string;
+  requested_at: number;
+  client_key: string;
+  recipient_key: string;
+  ports: number[];
+};
+
+export type ServiceAccessResponse = {
+  generation_id: string;
+  expires_at: number;
+  sealed: string;
+};
+
 export type SandboxLogEntry = {
   timestamp: string;
   stream: "stdout" | "stderr";
@@ -281,5 +295,41 @@ export class BoxComputeClient {
 
   async delete(id: string): Promise<void> {
     await this.request(`/api/v2/sandboxes/${encodeURIComponent(id)}`, { method: "DELETE" });
+  }
+
+  async createServiceAccess(id: string, request: ServiceAccessRequest): Promise<ServiceAccessResponse> {
+    return await this.request<ServiceAccessResponse>(`/api/v2/sandboxes/${encodeURIComponent(id)}/services`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "idempotency-key": request.operation_id },
+      body: JSON.stringify({
+        client_key: request.client_key,
+        requested_at: request.requested_at,
+        recipient_key: request.recipient_key,
+        ports: request.ports,
+      }),
+    });
+  }
+
+  async lookupServiceAccess(id: string, request: ServiceAccessRequest): Promise<ServiceAccessResponse> {
+    return await this.request<ServiceAccessResponse>(
+      `/api/v2/sandboxes/${encodeURIComponent(id)}/services/lookup`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", "idempotency-key": request.operation_id },
+        body: JSON.stringify({
+          client_key: request.client_key,
+          requested_at: request.requested_at,
+          recipient_key: request.recipient_key,
+          ports: request.ports,
+        }),
+      },
+    );
+  }
+
+  async revokeServiceAccess(id: string, generationId: string): Promise<void> {
+    await this.request(
+      `/api/v2/sandboxes/${encodeURIComponent(id)}/services/${encodeURIComponent(generationId)}`,
+      { method: "DELETE" },
+    );
   }
 }

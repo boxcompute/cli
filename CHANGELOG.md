@@ -3,6 +3,37 @@
 This file records user-visible changes to the BoxCompute CLI. GitHub Releases
 use the same notes and bind them to the exact source commit.
 
+## [0.6.0] - 2026-09-21
+
+Stream a running sandbox's desktop to a local VNC viewer with `bxc desktop`.
+
+### CLI users
+
+- `bxc desktop SANDBOX_ID` opens an authenticated service-access session that
+  maps one explicit local IPv4-loopback port (default 5900, `--local-port`) to
+  the sandbox guest's wayvnc listener on remote port 5900. It prints the local
+  endpoint, generation id and expiry, stays in the foreground until Ctrl-C,
+  then closes the session and revokes the generation. View with your own
+  RFB/VNC client against the printed loopback endpoint.
+- The local port must be free before any access is requested; there are no
+  wildcard listeners, no IPv6, and no automatic port fallback. Sessions expire
+  after one hour and are never renewed; run `bxc desktop` again for a fresh
+  generation. If nothing is listening, run `desktopctl start` inside the
+  sandbox.
+- Desktop streaming requires an HTTPS BoxCompute URL and a server that exposes
+  the service-access endpoints for port 5900.
+
+### Security
+
+- The service-access session reuses the security-reviewed service client
+  implementation verbatim (`src/services-session.ts`, vendored pending
+  `@boxcompute/sdk` >= 0.3.0). API credentials and recipient private keys
+  never enter the native service-client process; the native binary is
+  resolved from `BOXCOMPUTE_SERVICE_CLIENT` or, once published, from a
+  digest-pinned GitHub release asset on `boxcompute/sdk` that is verified
+  with sha256 before execution. Loopback binding prevents network exposure,
+  not access by other local-machine users.
+
 ## [0.5.0] - 2026-09-17
 
 Choose a larger VM profile with `bxc sandbox start --size small|large`.
