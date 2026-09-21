@@ -2,6 +2,7 @@
 import { spawn } from "node:child_process";
 import { readFileSync, realpathSync } from "node:fs";
 import { hostname, platform, release } from "node:os";
+import type { Readable, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { downloadFile, uploadFile } from "./files.js";
 import {
@@ -33,6 +34,9 @@ import {
   type HarnessDetection,
 } from "./skill.js";
 import { openServices, type ServiceMapping } from "./services.js";
+import { runProxy } from "./proxy.js";
+import { runSsh } from "./ssh.js";
+import { cooperativeConnectionApi } from "./cooperative-connection.js";
 
 const DEFAULT_URL = "https://app.boxcompute.ai";
 const CLI_VERSION = (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version;
@@ -57,6 +61,7 @@ Commands:
     logs                          Read current or retained sandbox logs
     exec                          Execute a program inside a sandbox
     expose                        Forward selected TCP ports to local loopback
+    ssh                           Open experimental lease-limited SSH
     upload                        Upload a local file (up to 8 MiB)
     download                      Download a complete file to a new local path
     delete                        [alias: rm] Destroy the runtime; the workspace remains
@@ -91,6 +96,7 @@ Examples:
   $ bxc sandbox logs SANDBOX_ID --source execute
   $ bxc sandbox exec SANDBOX_ID -- python -m pytest
   $ bxc sandbox expose SANDBOX_ID --port 3000
+  $ BOXCOMPUTE_ENABLE_SSH=1 bxc sandbox ssh SANDBOX_ID
 
 Compatibility:
 
@@ -110,6 +116,7 @@ Commands:
                                   Execute a program inside a sandbox
   expose SANDBOX_ID --port [LOCAL:]REMOTE
                                   Forward up to 8 TCP ports to 127.0.0.1
+  ssh SANDBOX_ID [options]        Open experimental non-PTY SSH for up to 30 seconds
   delete SANDBOX_ID --yes         [alias: rm] Destroy the runtime; keep the workspace
   upload SANDBOX_ID LOCAL REMOTE  Upload raw bytes under /workspace (up to 8 MiB)
   download SANDBOX_ID REMOTE LOCAL
@@ -143,6 +150,14 @@ Expose options:
 
   Expose binds only 127.0.0.1, lasts at most five minutes, never renews, and
   attempts to revoke the grant when it exits. Run it again for a new lease.
+
+SSH options:
+
+  --reconnect                     Verify one same-envelope reconnect after SSH exits
+  --revoke ENDPOINT_ID            Request best-effort cleanup without opening SSH
+
+  Requires BOXCOMPUTE_ENABLE_SSH=1. Available only for operator-enabled
+  sandboxes on Linux and macOS (x64 or arm64). Cleanup remains unconfirmed.
 
 Exec options:
 
@@ -187,7 +202,7 @@ Supported harnesses:
   goose, pi, windsurf, and the shared agents directory
 `;
 
-type Io = { stdout: NodeJS.WritableStream; stderr: NodeJS.WritableStream };
+type Io = { stdin?: Readable; stdout: Writable; stderr: Writable };
 type DeviceAuthorization = {
   deviceCode: string;
   userCode: string;
@@ -215,6 +230,8 @@ export type CliDependencies = {
   readSkill?: typeof readSkill;
   syncManagedSkills?: typeof syncManagedSkills;
   openServices?: typeof openServices;
+  proxy?: typeof runProxy;
+  ssh?: typeof runSsh;
 };
 
 class UsageError extends Error {
@@ -582,7 +599,7 @@ function logsOutput(io: Io, json: boolean, logs: SandboxLogs): number {
 
 export async function runCli(argv: string[], supplied: CliDependencies = {}): Promise<number> {
   const env = supplied.env ?? process.env;
-  const io = supplied.io ?? { stdout: process.stdout, stderr: process.stderr };
+  const io: Io = supplied.io ?? { stdin: process.stdin, stdout: process.stdout, stderr: process.stderr };
   const fetchImpl = supplied.fetch ?? fetch;
   const now = supplied.now ?? Date.now;
   const sleep = supplied.sleep ?? delay;
@@ -598,6 +615,9 @@ export async function runCli(argv: string[], supplied: CliDependencies = {}): Pr
   const skillText = supplied.readSkill ?? readSkill;
   const syncSkills = supplied.syncManagedSkills ?? syncManagedSkills;
   const expose = supplied.openServices ?? openServices;
+  const proxy = supplied.proxy ?? runProxy;
+  const ssh = supplied.ssh ?? runSsh;
+  const streamIo = { stdin: io.stdin ?? process.stdin, stdout: io.stdout, stderr: io.stderr };
   const args = [...argv];
   const json = globalFlag(args, "--json");
   const versionRequested = args[0] === "version" || globalFlag(args, "--version", "-V", "-v");
@@ -617,6 +637,11 @@ export async function runCli(argv: string[], supplied: CliDependencies = {}): Pr
   if (command === "up") command = "update";
   if (command === "skills") command = "skill";
   if (command === "list" || command === "ls") command = "sandboxes";
+
+  if (command === "proxy") {
+    if (json || args.length !== 1) throw new UsageError("proxy requires one private configuration file and no --json option");
+    return proxy(args[0]!, streamIo);
+  }
 
   const canAutoSync = supplied.syncManagedSkills !== undefined || supplied.env === undefined ||
     Boolean(env.HOME || env.USERPROFILE);
@@ -859,6 +884,17 @@ export async function runCli(argv: string[], supplied: CliDependencies = {}): Pr
       abort.abort();
       for (const signal of signals) process.off(signal, stop);
     }
+  }
+  if (action === "ssh") {
+    if (json) throw new UsageError("sandbox ssh carries raw bytes and does not support --json");
+    if (env.BOXCOMPUTE_ENABLE_SSH !== "1") {
+      throw new UsageError("sandbox ssh is experimental; set BOXCOMPUTE_ENABLE_SSH=1 to enable it");
+    }
+    const reconnect = flag(args, "reconnect");
+    const revoke = option(args, "revoke");
+    if (reconnect && revoke) throw new UsageError("--reconnect and --revoke cannot be combined");
+    if (args.length) throw new UsageError(`Unknown sandbox ssh option: ${args[0]}`);
+    return ssh(id, { reconnect, revoke }, cooperativeConnectionApi(connection, fetchImpl), env, streamIo);
   }
   if (action === "delete") {
     if (!flag(args, "yes") || args.length) throw new UsageError("sandbox delete requires SANDBOX_ID --yes");
