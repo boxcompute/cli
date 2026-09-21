@@ -1,6 +1,6 @@
 {
   "name": "@boxcompute/cli",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Connect local AI agents to BoxCompute sandboxes",
   "keywords": [
     "boxcompute",
@@ -42,6 +42,9 @@
     "prepack": "bun run build",
     "test": "bun test",
     "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@boxcompute/sdk": "^0.2.0"
   },
   "devDependencies": {
     "@types/bun": "latest",

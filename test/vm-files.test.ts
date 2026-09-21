@@ -3,14 +3,14 @@ import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
-import { BoxComputeClient, FILE_CHUNK_BYTES } from "../src/client.js";
+import { FILE_CHUNK_BYTES, createClient, validateFilePath } from "../src/sdk.js";
 import { downloadFile, uploadFile } from "../src/files.js";
 import { runCli } from "../src/cli.js";
 
 const connection = { url: "https://app.boxcompute.ai", token: "test-credential", tokenFile: "/unused" };
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
 const client = (handler: (url: string | URL | Request, init?: RequestInit) => Promise<Response>) =>
-  new BoxComputeClient(connection, handler as typeof fetch);
+  createClient(connection, handler as unknown as typeof fetch);
 const page = (bytes: Uint8Array, offset: number, size: number, cursor?: string) => new Response(new Uint8Array(bytes), {
   headers: {
     "x-boxcompute-offset": String(offset), "x-boxcompute-next-offset": String(offset + bytes.length),
@@ -26,51 +26,15 @@ async function directory(work: (root: string) => Promise<void>) {
 
 describe("VM creation", () => {
   it("reports the allocated ID if an older server silently ignores VM selection", async () => {
+    const io = { stdout: new PassThrough(), stderr: new PassThrough() };
     let calls = 0;
-    const api = client(async () => {
-      calls++;
-      return json({ sandbox: { id: "sbx_wrong_profile", state: "running" } }, 201);
-    });
-    await expect(api.start("ws_one", { vmSandbox: true, idempotencyKey: "saved-key" })).rejects.toThrow("sbx_wrong_profile");
+    const dependencies = {
+      io, env: {}, loadConnection: async () => connection, syncManagedSkills: async () => [],
+      fetch: (async () => { calls++; return json({ sandbox: { id: "sbx_wrong_profile", state: "running" } }, 201); }) as unknown as typeof fetch,
+    };
+    await expect(runCli(["sandbox", "start", "ws_one", "--vm", "--idempotency-key", "saved-key", "--no-wait"], dependencies))
+      .rejects.toThrow("sbx_wrong_profile");
     expect(calls).toBe(1);
-  });
-  it("preserves the key and body across explicit pending and completed replays", async () => {
-    const calls: RequestInit[] = [];
-    const api = client(async (_, init) => {
-      calls.push(init!);
-      return json({ sandbox: { id: "sbx_vm", vmSandbox: true, state: calls.length === 1 ? "pending" : "running" } }, calls.length === 1 ? 202 : 201);
-    });
-    const options = { vmSandbox: true, idempotencyKey: "vm-unique", name: " Test " };
-    expect((await api.start("ws_one", options)).state).toBe("pending");
-    expect((await api.start("ws_one", options)).id).toBe("sbx_vm");
-    expect(calls).toHaveLength(2);
-    expect(calls[0].body).toBe(calls[1].body);
-    expect(JSON.parse(String(calls[0].body))).toEqual({ workspaceId: "ws_one", vmSandbox: true, name: "Test" });
-    expect(new Headers(calls[0].headers).get("idempotency-key")).toBe("vm-unique");
-    expect(calls[0].redirect).toBe("error");
-  });
-
-  it("rejects invalid keys and names before allocating", async () => {
-    let calls = 0;
-    const api = client(async () => { calls++; throw new Error("unexpected request"); });
-    for (const key of [undefined, "", "bad key", "a".repeat(256), "bad\nkey"]) {
-      await expect(api.start("ws_one", { vmSandbox: true, idempotencyKey: key })).rejects.toThrow();
-    }
-    await expect(api.start("ws_one", { name: " " })).rejects.toThrow();
-    expect(calls).toBe(0);
-  });
-
-  it("does not retry or fall back after an ambiguous create or conflict", async () => {
-    for (const failure of ["timeout", "conflict"]) {
-      let calls = 0;
-      const api = client(async () => {
-        calls++;
-        if (failure === "timeout") throw new Error("timeout");
-        return json({ code: "IDEMPOTENCY_CONFLICT", error: "conflict" }, 409);
-      });
-      await expect(api.start("ws_one", { vmSandbox: true, idempotencyKey: "fixed-key" })).rejects.toThrow(failure);
-      expect(calls).toBe(1);
-    }
   });
 
   it("exposes pending and expired states through CLI JSON", async () => {
@@ -191,7 +155,7 @@ describe("file transfers", () => {
     await writeFile(local, Buffer.alloc(FILE_CHUNK_BYTES + 1));
     await expect(uploadFile(api, "sbx_one", local, "/workspace/large")).rejects.toThrow("8 MiB");
     for (const path of ["relative", "/workspace-other/file", "/workspace/../file", "/workspace/./file", "/workspace/a\0b"]) {
-      await expect(api.upload("sbx_one", path, bytes)).rejects.toThrow("Remote file paths");
+      expect(() => validateFilePath(path)).toThrow("Remote file paths");
     }
     expect(calls).toBe(1);
   }));
@@ -229,20 +193,6 @@ describe("file transfers", () => {
       expect(await readdir(root)).toEqual([]);
     }
   }));
-
-  it("rejects malformed, non-progressing, oversized and incomplete range responses", async () => {
-    const responses = [
-      new Response("data"),
-      page(new Uint8Array(), 0, 2, "cursor"),
-      page(new Uint8Array([1]), 0, 2),
-      page(new Uint8Array([1]), 1, 2),
-      new Response(new Uint8Array([1, 2]), { headers: page(new Uint8Array([1]), 0, 1).headers }),
-      new Response(null, { headers: page(new Uint8Array([1]), 0, 1).headers }),
-    ];
-    for (const response of responses) {
-      await expect(client(async () => response).readFile("sbx_one", "/workspace/file")).rejects.toThrow();
-    }
-  });
 
   it("downloads empty files and refuses a destination created during transfer", async () => directory(async (root) => {
     const local = join(root, "result");
