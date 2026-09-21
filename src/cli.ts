@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { readFileSync, realpathSync } from "node:fs";
+import { createServer } from "node:net";
 import { hostname, platform, release } from "node:os";
 import { fileURLToPath } from "node:url";
 import { downloadFile, uploadFile } from "./files.js";
@@ -21,6 +22,7 @@ import {
   saveConnection,
   type Connection,
 } from "./config.js";
+import { openServices, type ServiceAccessApi } from "./services-session.js";
 import {
   HARNESS_IDS,
   detectHarnesses,
@@ -49,6 +51,7 @@ Commands:
   doctor                          Verify the saved connection
   workspaces                      List workspaces that can own sandboxes
   sandboxes                       [aliases: list, ls] List sandbox instances
+  desktop SANDBOX_ID              Stream a sandbox desktop to a local VNC port
   sandbox                         Manage isolated BoxCompute sandboxes
     start                         Create and start a workspace sandbox
     status                        Inspect one sandbox
@@ -87,6 +90,7 @@ Examples:
   $ bxc sandbox start WORKSPACE_ID --size large --idempotency-key SAVED_UNIQUE_KEY
   $ bxc sandbox logs SANDBOX_ID --source execute
   $ bxc sandbox exec SANDBOX_ID -- python -m pytest
+  $ bxc desktop SANDBOX_ID
 
 Compatibility:
 
@@ -173,6 +177,33 @@ Supported harnesses:
   goose, pi, windsurf, and the shared agents directory
 `;
 
+const desktopHelp = `Stream a sandbox desktop to a local VNC viewer
+
+Usage: bxc desktop SANDBOX_ID [options]
+
+Opens an authenticated service-access session that maps one explicit local
+IPv4-loopback port to the sandbox guest's wayvnc listener on remote port
+5900. Connect your own RFB/VNC client to the printed local endpoint. The
+session stays in the foreground until Ctrl-C, then closes and revokes the
+generation.
+
+Options:
+
+  --local-port PORT               Local IPv4-loopback port (default: 5900).
+                                  It must be free before any access is
+                                  requested; no automatic fallback.
+  --json                          Emit machine-readable JSON and keep the
+                                  session in the foreground
+
+Notes:
+
+  One generation authorizes one viewer; a second concurrent viewer receives
+  busy. Sessions expire after one hour and are never renewed; run
+  \`bxc desktop\` again for a fresh generation. If nothing is listening on the
+  endpoint, run \`desktopctl start\` inside the sandbox. Requires an HTTPS
+  BoxCompute URL.
+`;
+
 type Io = { stdout: NodeJS.WritableStream; stderr: NodeJS.WritableStream };
 type DeviceAuthorization = {
   deviceCode: string;
@@ -200,6 +231,8 @@ export type CliDependencies = {
   removeSkill?: typeof removeSkill;
   readSkill?: typeof readSkill;
   syncManagedSkills?: typeof syncManagedSkills;
+  openDesktopSession?: typeof openServices;
+  desktopSignals?: (handler: () => void) => () => void;
 };
 
 class UsageError extends Error {
@@ -544,6 +577,8 @@ export async function runCli(argv: string[], supplied: CliDependencies = {}): Pr
   const remove = supplied.removeSkill ?? removeSkill;
   const skillText = supplied.readSkill ?? readSkill;
   const syncSkills = supplied.syncManagedSkills ?? syncManagedSkills;
+  const openSession = supplied.openDesktopSession ?? openServices;
+  const signals = supplied.desktopSignals ?? listenDesktopSignals;
   const args = [...argv];
   const json = globalFlag(args, "--json");
   const versionRequested = args[0] === "version" || globalFlag(args, "--version", "-V", "-v");
@@ -683,6 +718,21 @@ export async function runCli(argv: string[], supplied: CliDependencies = {}): Pr
     return 0;
   }
 
+  if (command === "desktop") {
+    const id = args.shift();
+    if (!id) throw new UsageError("desktop requires a sandbox ID");
+    return desktopCommand(id, args, {
+      io,
+      json,
+      env,
+      now,
+      fetch: fetchImpl,
+      connection: await load(env),
+      openSession,
+      signals,
+    });
+  }
+
   if (command === "sandbox" && !args.length) {
     write(io.stdout, sandboxHelp);
     return 0;
@@ -815,9 +865,114 @@ function removalStatus(status: "removed" | "missing"): string {
   return status === "removed" ? "Removed" : "Not installed";
 }
 
+function listenDesktopSignals(handler: () => void): () => void {
+  const signal = () => handler();
+  process.once("SIGINT", signal);
+  process.once("SIGTERM", signal);
+  return () => {
+    process.off("SIGINT", signal);
+    process.off("SIGTERM", signal);
+  };
+}
+
+async function assertLocalPortFree(port: number): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const server = createServer();
+    server.once("error", () => {
+      server.close(() => reject(new Error(`Local port ${port} is already in use. Free it or choose another --local-port; no desktop access was requested.`)));
+    });
+    server.once("listening", () => server.close(() => resolve()));
+    server.listen({ port, host: "127.0.0.1" });
+  });
+}
+
+async function desktopCommand(id: string, args: string[], dependencies: {
+  io: Io;
+  json: boolean;
+  env: NodeJS.ProcessEnv;
+  now: () => number;
+  connection: Connection;
+  fetch: typeof fetch;
+  openSession: typeof openServices;
+  signals: (handler: () => void) => () => void;
+}): Promise<number> {
+  const localPort = positive(option(args, "local-port"), "--local-port") ?? 5900;
+  if (args.length) throw new UsageError(`Unknown desktop option: ${args[0]}`);
+  if (!dependencies.connection.url.startsWith("https:")) {
+    throw new Error(`Desktop streaming requires an HTTPS BoxCompute URL; ${dependencies.connection.url} is not HTTPS. The public service contract is HTTPS-only.`);
+  }
+  await assertLocalPortFree(localPort);
+  const client = new BoxComputeClient(dependencies.connection, dependencies.fetch);
+  const api: ServiceAccessApi = {
+    createServiceAccess: (request) => client.createServiceAccess(id, request),
+    lookupServiceAccess: (request) => client.lookupServiceAccess(id, request),
+    revokeServiceAccess: (generation) => client.revokeServiceAccess(id, generation),
+  };
+  const session = await dependencies.openSession(api, [{ local: localPort, remote: 5900 }]);
+  const endpoint = `127.0.0.1:${localPort}`;
+  const expiresAt = new Date(session.expiresAt * 1000).toISOString();
+  const minutesRemaining = Math.max(0, Math.floor((session.expiresAt * 1000 - dependencies.now()) / 60_000));
+  emit(
+    dependencies.io,
+    dependencies.json,
+    {
+      sandboxId: id,
+      endpoint,
+      localPort,
+      remotePort: 5900,
+      generationId: session.generationId,
+      expiresAt,
+      minutesRemaining,
+    },
+    `Desktop endpoint: ${endpoint} (RFB/VNC)\n` +
+    `Sandbox: ${id}\n` +
+    `Generation: ${session.generationId}\n` +
+    `Expires at: ${expiresAt} (${minutesRemaining} minute${minutesRemaining === 1 ? "" : "s"} remaining)\n` +
+    "Press Ctrl-C to close the session and revoke access.\n" +
+    "If nothing is listening, run `desktopctl start` inside the sandbox.\n",
+  );
+
+  let signalArrived: () => void = () => undefined;
+  const signalPromise = new Promise<"signal">((resolve) => { signalArrived = () => resolve("signal"); });
+  const removeSignals = dependencies.signals(() => signalArrived());
+  let outcome: "signal" | "closed";
+  try {
+    outcome = await Promise.race([
+      signalPromise,
+      session.closed.then((): "closed" => "closed", (): "closed" => "closed"),
+    ]);
+  } finally {
+    removeSignals();
+  }
+  if (outcome === "signal") {
+    try {
+      await session.close();
+      emit(
+        dependencies.io,
+        dependencies.json,
+        { closed: true, revoked: true, generationId: session.generationId },
+        "Desktop session closed; access revoked.\n",
+      );
+      return 0;
+    } catch (error) {
+      write(
+        dependencies.io.stderr,
+        `Desktop session closed; revocation was not confirmed. ${formatCliError(error)} Access expires at its original deadline (${expiresAt}).\n`,
+      );
+      return 1;
+    }
+  }
+  write(
+    dependencies.io.stderr,
+    `Desktop session disconnected; access expires at its original deadline (${expiresAt}). Run \`bxc desktop ${id}\` again for a fresh generation.\n`,
+  );
+  return 1;
+}
+
 function helpFor(command?: string): string {
   if (command === "sandbox") return sandboxHelp;
   if (command === "skill" || command === "skills") return skillHelp;
+  if (command === "desktop") return desktopHelp;
   return rootHelp;
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { BoxComputeClient } from "../src/client.js";
+import { BoxComputeClient, type ServiceAccessRequest } from "../src/client.js";
 
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), {
   status,
@@ -138,5 +138,40 @@ describe("BoxCompute client", () => {
     await expect(client.list()).rejects.toThrow(
       "Upgrade the server before this CLI",
     );
+  });
+
+  it("creates, looks up, and revokes service-access generations", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const client = new BoxComputeClient({
+      url: "https://app.boxcompute.ai",
+      token: "bc_live_secret",
+      tokenFile: "/credential",
+    }, (async (input: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      if (init?.method === "DELETE") return new Response(null, { status: 204 });
+      return json({ generation_id: "3f0a1c2e-5b6d-4c7e-8f90-112233445566", expires_at: 1790000000, sealed: "c2VhbGVk" }, 201);
+    }) as typeof globalThis.fetch);
+
+    const request: ServiceAccessRequest = {
+      operation_id: "3f0a1c2e-5b6d-4c7e-8f90-112233445566",
+      requested_at: 1789996400,
+      client_key: "nodekey:" + "a".repeat(64),
+      recipient_key: "cHVia2V5",
+      ports: [5900],
+    };
+    await client.createServiceAccess("sbx-one", request);
+    await client.lookupServiceAccess("sbx-one", request);
+    await client.revokeServiceAccess("sbx-one", "3f0a1c2e-5b6d-4c7e-8f90-112233445566");
+
+    expect(calls.map((call) => [call.init?.method, call.url])).toEqual([
+      ["POST", "https://app.boxcompute.ai/api/v2/sandboxes/sbx-one/services"],
+      ["POST", "https://app.boxcompute.ai/api/v2/sandboxes/sbx-one/services/lookup"],
+      ["DELETE", "https://app.boxcompute.ai/api/v2/sandboxes/sbx-one/services/3f0a1c2e-5b6d-4c7e-8f90-112233445566"],
+    ]);
+    const body = JSON.parse(String(calls[0]!.init?.body));
+    expect(Object.keys(body).sort()).toEqual(["client_key", "ports", "recipient_key", "requested_at"]);
+    expect(body).toEqual({ client_key: request.client_key, requested_at: request.requested_at, recipient_key: request.recipient_key, ports: [5900] });
+    expect(new Headers(calls[0]!.init?.headers).get("idempotency-key")).toBe(request.operation_id);
+    expect(calls.every((call) => new Headers(call.init?.headers).get("authorization") === "Bearer bc_live_secret")).toBe(true);
   });
 });
