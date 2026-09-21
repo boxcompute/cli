@@ -78,7 +78,9 @@ jobs:
   publish:
     name: Publish release
     needs: validate
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    # npm sigstore provenance is only verifiable from GitHub-hosted runners;
+    # Blacksmith runners report as self-hosted and npm rejects the bundle.
+    runs-on: ubuntu-latest
     environment: npm
     permissions:
       contents: write

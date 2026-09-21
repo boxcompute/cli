@@ -161,6 +161,108 @@ describe("bxc CLI", () => {
     expect(output(io.stdout)).toBe("workspace-one\tDemo\n");
   });
 
+  it("sets scheduler CPU when starting a sandbox", async () => {
+    const connection = { url: "https://app.boxcompute.ai", token: "bc_live_test", tokenFile: "/credential" };
+    const bodies: unknown[] = [];
+    const dependencies = {
+      io: streams(),
+      env: {},
+      loadConnection: async () => connection,
+      fetch: (async (_input: string | URL | Request, init?: RequestInit) => {
+        bodies.push(JSON.parse(String(init?.body)));
+        return new Response(JSON.stringify({ sandbox: {
+          id: "sandbox-one",
+          workspaceId: "workspace-one",
+          name: "Demo",
+          state: "running",
+          runtimeId: "runtime-one",
+          retainedRuntimeId: null,
+          image: null,
+          createdAt: 1,
+          lastUsedAt: 1,
+        } }), { status: 201, headers: { "content-type": "application/json" } });
+      }) as typeof globalThis.fetch,
+    };
+
+    expect(await runCli(["sandbox", "start", "workspace-one", "--cpu", "0.1"], dependencies)).toBe(0);
+    expect(await runCli(["sandbox", "start", "workspace-one", "--cpu", "4"], dependencies)).toBe(0);
+
+    expect(bodies).toEqual([
+      { workspaceId: "workspace-one", cpu: 0.1, vmSandbox: false },
+      { workspaceId: "workspace-one", cpu: 4, vmSandbox: false },
+    ]);
+  });
+
+  it("sends the VM size, defaulting to small, and rejects large on gVisor", async () => {
+    const connection = { url: "https://app.boxcompute.ai", token: "bc_live_test", tokenFile: "/credential" };
+    const bodies: unknown[] = [];
+    const dependencies = {
+      io: streams(),
+      env: {},
+      loadConnection: async () => connection,
+      fetch: (async (_input: string | URL | Request, init?: RequestInit) => {
+        bodies.push(JSON.parse(String(init?.body)));
+        return new Response(JSON.stringify({ sandbox: {
+          id: "sandbox-one",
+          workspaceId: "workspace-one",
+          name: "Demo",
+          state: "running",
+          vmSandbox: true,
+          runtimeId: "runtime-one",
+          retainedRuntimeId: null,
+          image: null,
+          createdAt: 1,
+          lastUsedAt: 1,
+        } }), { status: 201, headers: { "content-type": "application/json" } });
+      }) as typeof globalThis.fetch,
+    };
+
+    expect(await runCli(["sandbox", "start", "workspace-one"], dependencies)).toBe(0);
+    expect(await runCli(["sandbox", "start", "workspace-one", "--size", "small"], dependencies)).toBe(0);
+    expect(await runCli([
+      "sandbox", "start", "workspace-one", "--vm", "--idempotency-key", "key-one", "--size", "large",
+    ], dependencies)).toBe(0);
+
+    expect(bodies).toEqual([
+      { workspaceId: "workspace-one", size: "small" },
+      { workspaceId: "workspace-one", size: "small" },
+      { workspaceId: "workspace-one", vmSandbox: true, size: "large" },
+    ]);
+
+    const rejected = {
+      io: streams(),
+      env: {},
+      loadConnection: async () => connection,
+      fetch: (async () => { throw new Error("should not fetch"); }) as unknown as typeof globalThis.fetch,
+    };
+    await expect(runCli(["sandbox", "start", "workspace-one", "--size", "medium"], rejected))
+      .rejects.toThrow("--size must be one of: small, large");
+    await expect(runCli(["sandbox", "start", "workspace-one", "--gvisor", "--size", "large"], rejected))
+      .rejects.toThrow("--size large is VM only");
+    await expect(runCli(["sandbox", "start", "workspace-one", "--cpu", "2", "--size", "large"], rejected))
+      .rejects.toThrow("--size large is VM only");
+  });
+
+  it("rejects scheduler CPU outside the supported range before calling the server", async () => {
+    const dependencies = {
+      io: streams(),
+      env: {},
+      loadConnection: async () => ({
+        url: "https://app.boxcompute.ai",
+        token: "bc_live_test",
+        tokenFile: "/credential",
+      }),
+      fetch: (async () => { throw new Error("should not fetch"); }) as unknown as typeof globalThis.fetch,
+    };
+
+    await expect(runCli(["sandbox", "start", "workspace-one", "--cpu", "0.09"], dependencies))
+      .rejects.toThrow("--cpu must be a number from 0.1 to 4");
+    await expect(runCli(["sandbox", "start", "workspace-one", "--cpu", "4.01"], dependencies))
+      .rejects.toThrow("--cpu must be a number from 0.1 to 4");
+    await expect(runCli(["sandbox", "start", "workspace-one", "--cpu", "fast"], dependencies))
+      .rejects.toThrow("--cpu must be a number from 0.1 to 4");
+  });
+
   it("reads retained sandbox logs with filters without starting compute", async () => {
     const io = streams();
     const connection = { url: "https://app.boxcompute.ai", token: "bc_live_test", tokenFile: "/credential" };
@@ -181,14 +283,12 @@ describe("bxc CLI", () => {
         requested = String(input);
         method = init?.method;
         return new Response(JSON.stringify({ logs: {
-          sandbox_id: "runtime-one",
+          sandboxId: "runtime-one",
           entries: [{
             timestamp: "2026-09-06T01:02:03.000Z",
             stream: "stderr",
             source: "process",
             message: "database ready",
-            pod_uid: "pod-one",
-            process_id: "proc-one",
           }],
           truncated: false,
           retention_seconds: 2_592_000,
@@ -196,7 +296,7 @@ describe("bxc CLI", () => {
       }) as typeof globalThis.fetch,
     })).toBe(0);
 
-    expect(method).toBeUndefined();
+    expect(method).toBe("GET");
     expect(requested).toContain("/api/v2/sandboxes/sandbox-one/logs?");
     expect(requested).toContain("since=2026-09-01T00%3A00%3A00.000Z");
     expect(requested).toContain("until=2026-09-07T00%3A00%3A00.000Z");
@@ -226,12 +326,11 @@ describe("bxc CLI", () => {
           timedOut: false,
           stdoutTruncated: false,
           stderrTruncated: false,
-          wallTimeSeconds: 0.01,
         } }), { status: 200, headers: { "content-type": "application/json" } });
       }) as typeof globalThis.fetch,
     })).toBe(0);
 
-    expect(body).toEqual({ argv: ["python", "--version", "--json"] });
+    expect(body).toEqual({ argv: ["python", "--version", "--json"], cwd: "/workspace", timeoutSeconds: 120, maxOutputBytes: 262_144 });
     expect(JSON.parse(output(io.stdout))).toMatchObject({
       sandboxId: "sandbox-one",
       stdout: "Python 3.14.4\n",
@@ -344,6 +443,12 @@ describe("bxc CLI", () => {
     const io = streams();
     expect(await runCli(["skill", "--help"], { io, env: {} })).toBe(0);
     expect(output(io.stdout)).toContain("Usage: bxc skill <command> [options]");
+
+    const sandboxIo = streams();
+    expect(await runCli(["sandbox", "--help"], { io: sandboxIo, env: {} })).toBe(0);
+    const sandboxHelp = output(sandboxIo.stdout);
+    expect(sandboxHelp).toContain("--cpu CPU");
+    expect(sandboxHelp).toContain("--size small|large");
 
     const versionIo = streams();
     expect(await runCli(["--version"], { io: versionIo, env: {} })).toBe(0);

@@ -14,7 +14,7 @@ import { join } from "node:path";
 import type { Readable, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import type { BoxComputeClient } from "./client.js";
+import type { CooperativeConnectionApi } from "./cooperative-connection.js";
 
 export type CliIo = { stdin: Readable; stdout: Writable; stderr: Writable };
 
@@ -214,7 +214,7 @@ async function childProcess(
 export async function runSsh(
   sandboxId: string,
   action: { reconnect?: boolean; revoke?: string },
-  client: BoxComputeClient,
+  client: CooperativeConnectionApi,
   env: NodeJS.ProcessEnv,
   io: CliIo,
 ): Promise<number> {

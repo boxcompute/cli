@@ -4,15 +4,17 @@ import { readFileSync, realpathSync } from "node:fs";
 import { hostname, platform, release } from "node:os";
 import type { Readable, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
+import { downloadFile, uploadFile } from "./files.js";
 import {
-  BoxComputeClient,
-  BoxComputeHttpError,
-  publicRequest,
-  type Execution,
+  BoxCompute,
+  BoxComputeError,
+  BoxComputeTransportError,
+  type ExecutionResult,
   type Sandbox,
   type SandboxLogs,
   type Workspace,
-} from "./client.js";
+} from "@boxcompute/sdk";
+import { buildCreateSandboxRequest, createClient, type SandboxSize } from "./sdk.js";
 import {
   clearConnection,
   loadConnection,
@@ -32,6 +34,7 @@ import {
 } from "./skill.js";
 import { runProxy } from "./proxy.js";
 import { runSsh } from "./ssh.js";
+import { cooperativeConnectionApi } from "./cooperative-connection.js";
 
 const DEFAULT_URL = "https://app.boxcompute.ai";
 const CLI_VERSION = (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version;
@@ -56,6 +59,8 @@ Commands:
     logs                          Read current or retained sandbox logs
     exec                          Execute a program inside a sandbox
     ssh                           Open experimental lease-limited SSH
+    upload                        Upload a local file (up to 8 MiB)
+    download                      Download a complete file to a new local path
     delete                        [alias: rm] Destroy the runtime; the workspace remains
   skill                           [alias: skills] Manage coding-harness skills
     detect                        Detect compatible coding harnesses
@@ -83,6 +88,8 @@ Examples:
   $ bxc skill install
   $ bxc workspaces
   $ bxc sandbox start WORKSPACE_ID
+  $ bxc sandbox start WORKSPACE_ID --cpu 2
+  $ bxc sandbox start WORKSPACE_ID --size large --idempotency-key SAVED_UNIQUE_KEY
   $ bxc sandbox logs SANDBOX_ID --source execute
   $ bxc sandbox exec SANDBOX_ID -- python -m pytest
   $ BOXCOMPUTE_ENABLE_SSH=1 bxc sandbox ssh SANDBOX_ID
@@ -105,6 +112,30 @@ Commands:
                                   Execute a program inside a sandbox
   ssh SANDBOX_ID [options]        Open experimental non-PTY SSH for up to 30 seconds
   delete SANDBOX_ID --yes         [alias: rm] Destroy the runtime; keep the workspace
+  upload SANDBOX_ID LOCAL REMOTE  Upload raw bytes under /workspace (up to 8 MiB)
+  download SANDBOX_ID REMOTE LOCAL
+                                  Download all chunks; refuse an existing local file
+
+Start options:
+
+  --size small|large              VM only: VM profile size (default: small).
+                                  small = 0.5 CPU / 1024 MiB; large = 1.5 CPU / 3072 MiB
+  --vm                            Explicitly request a VM sandbox; requires
+                                  --idempotency-key, reused with the same options on retry
+  --gvisor                        Explicitly request a gVisor container sandbox
+  --cpu CPU                       gVisor only: scheduler CPU allocation (0.1–4);
+                                  implies --gvisor
+  --idempotency-key KEY           Required for --vm; reusable for any create
+  --name NAME                     Optional sandbox name (1–80 trimmed characters)
+  --no-wait                       Return the creation receipt without waiting
+
+  Without --vm or --gvisor, the server's default runtime is selected (VM).
+  --size is VM only: gVisor ignores small and rejects large. VM sizing is
+  mutually exclusive with --cpu.
+  Start waits up to 180 seconds for a pending sandbox to reach running and
+  reports its state either way. No automatic retries or replacement VMs.
+  Transfers never retry; downloads stop after five minutes and discard partial
+  output on failure.
 
 SSH options:
 
@@ -354,6 +385,15 @@ function positive(value: string | undefined, name: string): number | undefined {
   return parsed;
 }
 
+function schedulerCpu(value: string | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0.1 || parsed > 4) {
+    throw new UsageError("--cpu must be a number from 0.1 to 4");
+  }
+  return parsed;
+}
+
 function timestamp(value: string | undefined, name: string): string | undefined {
   if (value === undefined) return undefined;
   const parsed = new Date(value);
@@ -389,6 +429,24 @@ function environment(tokens: string[]): Record<string, string> | undefined {
   }));
 }
 
+async function deviceRequest<T>(
+  url: string,
+  pathname: string,
+  init: RequestInit,
+  fetchImpl: typeof fetch,
+): Promise<T> {
+  const response = await fetchImpl(new URL(pathname, `${url}/`), init);
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({})) as { error?: string; code?: string };
+    throw new BoxComputeError({
+      status: response.status,
+      code: body.code ?? "HTTP_ERROR",
+      message: body.error ?? `BoxCompute returned HTTP ${response.status}`,
+    });
+  }
+  return response.status === 204 ? undefined as T : await response.json() as T;
+}
+
 async function authenticate(args: string[], dependencies: Required<Pick<CliDependencies,
   "fetch" | "now" | "sleep" | "openBrowser" | "loadSavedUrl" | "saveConnection"
 >> & { env: NodeJS.ProcessEnv; io: Io; json: boolean }): Promise<number> {
@@ -397,13 +455,13 @@ async function authenticate(args: string[], dependencies: Required<Pick<CliDepen
   if (args.length) throw new UsageError(`Unexpected auth argument: ${args[0]}`);
   let started: DeviceAuthorization;
   try {
-    started = await publicRequest<DeviceAuthorization>(url, "/api/cli-auth/device", {
+    started = await deviceRequest<DeviceAuthorization>(url, "/api/cli-auth/device", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ clientName: `${hostname()} (${platform()})` }),
     }, dependencies.fetch);
   } catch (error) {
-    if (error instanceof BoxComputeHttpError && [401, 404, 405].includes(error.status)) {
+    if (error instanceof BoxComputeError && [401, 404, 405].includes(error.status)) {
       throw new Error(
         `Browser login is not available at ${url} (HTTP ${error.status}). ` +
         "The BoxCompute server must be updated to support CLI authentication. " +
@@ -433,7 +491,7 @@ async function authenticate(args: string[], dependencies: Required<Pick<CliDepen
   while (dependencies.now() < deadline) {
     await dependencies.sleep(Math.max(1, started.interval) * 1000);
     try {
-      const result = await publicRequest<{ token: string }>(url, "/api/cli-auth/token", {
+      const result = await deviceRequest<{ token: string }>(url, "/api/cli-auth/token", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ deviceCode: started.deviceCode }),
@@ -442,8 +500,8 @@ async function authenticate(args: string[], dependencies: Required<Pick<CliDepen
       emit(dependencies.io, dependencies.json, { authenticated: true, url }, `Authenticated with ${url}.\nNext: bxc skill install\n`);
       return 0;
     } catch (error) {
-      if (error instanceof BoxComputeHttpError && error.status === 428 && error.message === "authorization_pending") continue;
-      if (error instanceof BoxComputeHttpError && error.status === 410) throw new Error("Browser authentication expired. Run `bxc auth` again.");
+      if (error instanceof BoxComputeError && error.status === 428 && error.message === "authorization_pending") continue;
+      if (error instanceof BoxComputeError && error.status === 410) throw new Error("Browser authentication expired. Run `bxc auth` again.");
       throw error;
     }
   }
@@ -454,18 +512,36 @@ function sandboxLine(sandbox: Sandbox): string {
   return `${sandbox.id}\t${sandbox.state}\t${sandbox.name}\n`;
 }
 
+const SANDBOX_READY_TIMEOUT_MS = 180_000;
+const SANDBOX_READY_POLL_MS = 3_000;
+
+async function awaitRunning(
+  client: BoxCompute,
+  id: string,
+  sleep: (milliseconds: number) => Promise<void>,
+  now: () => number,
+): Promise<{ sandbox: Sandbox; timedOut: boolean }> {
+  const deadline = now() + SANDBOX_READY_TIMEOUT_MS;
+  for (;;) {
+    await sleep(SANDBOX_READY_POLL_MS);
+    const sandbox = await client.sandboxes.inspect(id);
+    if (sandbox.state === "running" || sandbox.state === "expired") return { sandbox, timedOut: false };
+    if (now() >= deadline) return { sandbox, timedOut: true };
+  }
+}
+
 function workspaceLine(workspace: Workspace): string {
   return `${workspace.id}\t${workspace.name}\n`;
 }
 
-function executionOutput(io: Io, json: boolean, sandboxId: string, result: Execution): number {
+function executionOutput(io: Io, json: boolean, sandboxId: string, result: ExecutionResult): number {
   if (json) emit(io, true, { sandboxId, ...result }, "");
   else {
     write(io.stdout, result.stdout);
     write(io.stderr, result.stderr);
-    write(io.stderr, `sandbox=${sandboxId} exitCode=${result.exitCode ?? "null"} timedOut=${result.timedOut}\n`);
+    write(io.stderr, `sandbox=${sandboxId} exitCode=${result.exitCode} timedOut=${result.timedOut}\n`);
   }
-  return result.exitCode ?? 1;
+  return result.exitCode;
 }
 
 function logsOutput(io: Io, json: boolean, logs: SandboxLogs): number {
@@ -475,12 +551,11 @@ function logsOutput(io: Io, json: boolean, logs: SandboxLogs): number {
   }
   if (!logs.entries.length) write(io.stdout, "No logs found.\n");
   for (const entry of logs.entries) {
-    const process = entry.process_id ? ` ${entry.process_id}` : "";
-    write(io.stdout, `${entry.timestamp}\t${entry.stream}\t${entry.source}${process}\t${entry.message}\n`);
+    write(io.stdout, `${entry.timestamp}\t${entry.stream}\t${entry.source}\t${entry.message}\n`);
   }
   write(
     io.stderr,
-    `sandbox=${logs.sandbox_id} entries=${logs.entries.length} retentionSeconds=${logs.retention_seconds}` +
+    `sandbox=${logs.sandboxId} entries=${logs.entries.length} retentionSeconds=${logs.retention_seconds}` +
       `${logs.truncated ? " truncated=true" : ""}\n`,
   );
   return 0;
@@ -563,7 +638,7 @@ export async function runCli(argv: string[], supplied: CliDependencies = {}): Pr
   if (command === "logout") {
     if (args.length) throw new UsageError("logout takes no options");
     const connection = await load(env);
-    await new BoxComputeClient(connection, fetchImpl).logout();
+    await createClient(connection, fetchImpl).auth.revoke();
     await clear(env);
     emit(io, json, { authenticated: false }, "BoxCompute CLI credential revoked and removed.\n");
     return 0;
@@ -575,7 +650,7 @@ export async function runCli(argv: string[], supplied: CliDependencies = {}): Pr
       args.shift();
       if (args.length) throw new UsageError("auth logout takes no options");
       const connection = await load(env);
-      await new BoxComputeClient(connection, fetchImpl).logout();
+      await createClient(connection, fetchImpl).auth.revoke();
       await clear(env);
       emit(io, json, { authenticated: false }, "BoxCompute CLI credential revoked and removed.\n");
       return 0;
@@ -656,21 +731,21 @@ export async function runCli(argv: string[], supplied: CliDependencies = {}): Pr
   }
 
   const connection = await load(env);
-  const client = new BoxComputeClient(connection, fetchImpl);
+  const client = createClient(connection, fetchImpl);
   if (command === "doctor") {
-    const sandboxes = await client.list();
+    const sandboxes = await client.sandboxes.list();
     emit(io, json, { connected: true, url: connection.url, sandboxes: sandboxes.length }, `Connected to ${connection.url} · ${sandboxes.length} sandbox${sandboxes.length === 1 ? "" : "es"}\n`);
     return 0;
   }
   if (command === "sandboxes") {
     if (args.length) throw new UsageError("sandboxes takes no options");
-    const sandboxes = await client.list();
+    const sandboxes = await client.sandboxes.list();
     emit(io, json, { sandboxes }, sandboxes.length ? sandboxes.map(sandboxLine).join("") : "No sandboxes found. Start one for a BoxCompute workspace first.\n");
     return 0;
   }
   if (command === "workspaces") {
     if (args.length) throw new UsageError("workspaces takes no options");
-    const workspaces = await client.listWorkspaces();
+    const workspaces = await client.workspaces.list();
     emit(io, json, { workspaces }, workspaces.length ? workspaces.map(workspaceLine).join("") : "No workspaces found. Create one in BoxCompute first.\n");
     return 0;
   }
@@ -681,14 +756,60 @@ export async function runCli(argv: string[], supplied: CliDependencies = {}): Pr
   const id = args.shift();
   if (!action || !id) throw new UsageError("sandbox requires an action and sandbox ID");
   if (action === "start") {
-    if (args.length) throw new UsageError("sandbox start takes one workspace ID");
-    const sandbox = await client.start(id);
+    const cpu = schedulerCpu(option(args, "cpu"));
+    const vmSandbox = flag(args, "vm");
+    const gvisor = flag(args, "gvisor");
+    const size: SandboxSize = oneOf(option(args, "size"), "--size", ["small", "large"] as const) ?? "small";
+    const idempotencyKey = option(args, "idempotency-key");
+    const name = option(args, "name");
+    const noWait = flag(args, "no-wait");
+    if (args.length) throw new UsageError(`Unknown sandbox start option: ${args[0]}`);
+    if (vmSandbox && gvisor) throw new UsageError("sandbox start accepts either --vm or --gvisor, not both");
+    if (vmSandbox && cpu !== undefined) throw new UsageError("VM sandboxes use a fixed CPU profile; --cpu selects the gVisor runtime");
+    if (vmSandbox && !idempotencyKey) throw new UsageError("sandbox start --vm requires --idempotency-key; save and reuse it with the same options on retry");
+    if (gvisor && size === "large") throw new UsageError("--size large is VM only; gVisor container sandboxes ignore --size small");
+    let sandbox = await client.sandboxes.create(buildCreateSandboxRequest(id, {
+      cpu,
+      vmSandbox,
+      gvisor: gvisor || cpu !== undefined,
+      size,
+      idempotencyKey,
+      name,
+    }));
+    if (vmSandbox && sandbox.vmSandbox !== true) {
+      throw new Error(`Server did not confirm VM selection for sandbox ${sandbox.id}; inspect and clean up that ID before retrying. Upgrade the server to one that supports VM creation.`);
+    }
+    if (sandbox.state === "pending" && !noWait) {
+      write(io.stderr, `Sandbox ${sandbox.id} is pending; waiting up to ${SANDBOX_READY_TIMEOUT_MS / 1000} seconds for running...\n`);
+      const outcome = await awaitRunning(client, sandbox.id, sleep, now);
+      sandbox = outcome.sandbox;
+      emit(io, json, { sandbox }, sandboxLine(sandbox));
+      if (sandbox.state === "expired") {
+        write(io.stderr, `Sandbox ${sandbox.id} expired before reaching running.\n`);
+        return 1;
+      }
+      if (outcome.timedOut) {
+        write(io.stderr, `Sandbox ${sandbox.id} is still ${sandbox.state}. Check later with 'bxc sandbox status ${sandbox.id}'.\n`);
+        return 1;
+      }
+      return 0;
+    }
     emit(io, json, { sandbox }, sandboxLine(sandbox));
+    if (sandbox.state === "pending") write(io.stderr, "Creation receipt only. Save the sandbox ID; use sandbox status to confirm readiness. Reuse the same key and options on retry.\n");
+    return 0;
+  }
+  if (action === "upload" || action === "download") {
+    if (args.length !== 2) throw new UsageError(`sandbox ${action} requires SANDBOX_ID ${action === "upload" ? "LOCAL REMOTE" : "REMOTE LOCAL"}`);
+    const [source, destination] = args;
+    const bytes = action === "upload"
+      ? await uploadFile(client, id, source, destination)
+      : await downloadFile(client, id, source, destination);
+    emit(io, json, { sandboxId: id, source, destination, bytes }, `${action === "upload" ? "Uploaded" : "Downloaded"} ${bytes} bytes: ${source} -> ${destination}\n`);
     return 0;
   }
   if (action === "status") {
     if (args.length) throw new UsageError("sandbox status takes one sandbox ID");
-    const sandbox = await client.inspect(id);
+    const sandbox = await client.sandboxes.inspect(id);
     emit(io, json, { sandbox }, sandboxLine(sandbox));
     return 0;
   }
@@ -701,7 +822,7 @@ export async function runCli(argv: string[], supplied: CliDependencies = {}): Pr
     if (limit !== undefined && limit > 5_000) throw new UsageError("--limit must be 5000 or fewer");
     if (since && until && since >= until) throw new UsageError("--since must be earlier than --until");
     if (args.length) throw new UsageError(`Unknown sandbox logs option: ${args[0]}`);
-    return logsOutput(io, json, await client.logs(id, { since, until, stream, source, limit }));
+    return logsOutput(io, json, await client.sandboxes.logs(id, { since, until, stream, source, limit }));
   }
   if (action === "ssh") {
     if (json) throw new UsageError("sandbox ssh carries raw bytes and does not support --json");
@@ -712,11 +833,11 @@ export async function runCli(argv: string[], supplied: CliDependencies = {}): Pr
     const revoke = option(args, "revoke");
     if (reconnect && revoke) throw new UsageError("--reconnect and --revoke cannot be combined");
     if (args.length) throw new UsageError(`Unknown sandbox ssh option: ${args[0]}`);
-    return ssh(id, { reconnect, revoke }, client, env, streamIo);
+    return ssh(id, { reconnect, revoke }, cooperativeConnectionApi(connection, fetchImpl), env, streamIo);
   }
   if (action === "delete") {
     if (!flag(args, "yes") || args.length) throw new UsageError("sandbox delete requires SANDBOX_ID --yes");
-    await client.delete(id);
+    await client.sandboxes.delete(id);
     emit(io, json, { sandboxId: id, deleted: true }, `Destroyed sandbox runtime ${id}; its workspace remains.\n`);
     return 0;
   }
@@ -730,7 +851,14 @@ export async function runCli(argv: string[], supplied: CliDependencies = {}): Pr
     const maxOutputBytes = positive(option(options, "max-output-bytes"), "--max-output-bytes");
     const envInput = environment(options);
     if (options.length) throw new UsageError(`Unknown sandbox exec option: ${options[0]}`);
-    return executionOutput(io, json, id, await client.execute(id, { argv: args, cwd, timeoutSeconds, maxOutputBytes, env: envInput }));
+    const execution = await client.sandboxes.execute(id, {
+      argv: args,
+      cwd: cwd ?? "/workspace",
+      timeoutSeconds: timeoutSeconds ?? 120,
+      maxOutputBytes: maxOutputBytes ?? 262_144,
+      ...(envInput ? { env: envInput } : {}),
+    });
+    return executionOutput(io, json, id, execution);
   }
   throw new UsageError(`Unknown sandbox action: ${action}`);
 }
@@ -757,7 +885,8 @@ function helpFor(command?: string): string {
 }
 
 export function formatCliError(error: unknown): string {
-  if (error instanceof BoxComputeHttpError) return `${error.message} (HTTP ${error.status})`;
+  if (error instanceof BoxComputeError) return `${error.message} (HTTP ${error.status}${error.code ? ` ${error.code}` : ""})`;
+  if (error instanceof BoxComputeTransportError) return error.message;
   return error instanceof Error ? error.message : String(error);
 }
 
