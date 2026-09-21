@@ -4,6 +4,9 @@
   "workspaces": {
     "": {
       "name": "@boxcompute/cli",
+      "dependencies": {
+        "@boxcompute/sdk": "^0.2.0",
+      },
       "devDependencies": {
         "@types/bun": "latest",
         "@types/node": "^26.0.0",
@@ -13,6 +16,8 @@
     },
   },
   "packages": {
+    "@boxcompute/sdk": ["@boxcompute/sdk@0.2.0", "", {}, "sha512-Sp3vuMgJUrzlrnXOH90xqdOeAMTSOYbv4EHB5H9k4KOn3+ZUPi5BQvYcoIblLIX4W4GvMGI+hyXUdetJMnzSkw=="],
+
     "@oxlint/binding-android-arm-eabi": ["@oxlint/binding-android-arm-eabi@1.82.0", "", { "os": "android", "cpu": "arm" }, "sha512-a3LB+C5Dsj5b/qtmG/mv5WrzuiXEpg1KF5nXWcEvaoN5TYAqkIvxPOwTPp3Jy/FoGpRo8zsTFhMElMXfeoOEzA=="],
 
     "@oxlint/binding-android-arm64": ["@oxlint/binding-android-arm64@1.82.0", "", { "os": "android", "cpu": "arm64" }, "sha512-OBlhRgNqFblGpGenno/aqOfJLOkQ2B8Ig3iDAalfn0H8hJGZKXPeexCRTDm6uwv6YUjSA9Xnwt1y/Bgj5ZH8uw=="],

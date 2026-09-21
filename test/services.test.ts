@@ -8,7 +8,7 @@ import {
   randomBytes,
 } from "node:crypto";
 import { unsealServices } from "../src/services.js";
-import type { ServiceAccessRequest } from "../src/client.js";
+import type { ServiceAccessRequest } from "../src/service-access.js";
 
 const generation = "11234567-89ab-4cde-8fab-0123456789ab";
 

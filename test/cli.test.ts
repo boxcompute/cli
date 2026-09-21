@@ -315,14 +315,12 @@ describe("bxc CLI", () => {
         requested = String(input);
         method = init?.method;
         return new Response(JSON.stringify({ logs: {
-          sandbox_id: "runtime-one",
+          sandboxId: "runtime-one",
           entries: [{
             timestamp: "2026-09-06T01:02:03.000Z",
             stream: "stderr",
             source: "process",
             message: "database ready",
-            pod_uid: "pod-one",
-            process_id: "proc-one",
           }],
           truncated: false,
           retention_seconds: 2_592_000,
@@ -330,7 +328,7 @@ describe("bxc CLI", () => {
       }) as typeof globalThis.fetch,
     })).toBe(0);
 
-    expect(method).toBeUndefined();
+    expect(method).toBe("GET");
     expect(requested).toContain("/api/v2/sandboxes/sandbox-one/logs?");
     expect(requested).toContain("since=2026-09-01T00%3A00%3A00.000Z");
     expect(requested).toContain("until=2026-09-07T00%3A00%3A00.000Z");
@@ -360,12 +358,11 @@ describe("bxc CLI", () => {
           timedOut: false,
           stdoutTruncated: false,
           stderrTruncated: false,
-          wallTimeSeconds: 0.01,
         } }), { status: 200, headers: { "content-type": "application/json" } });
       }) as typeof globalThis.fetch,
     })).toBe(0);
 
-    expect(body).toEqual({ argv: ["python", "--version", "--json"] });
+    expect(body).toEqual({ argv: ["python", "--version", "--json"], cwd: "/workspace", timeoutSeconds: 120, maxOutputBytes: 262_144 });
     expect(JSON.parse(output(io.stdout))).toMatchObject({
       sandboxId: "sandbox-one",
       stdout: "Python 3.14.4\n",

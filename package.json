@@ -45,6 +45,9 @@
     "test:native": "go -C native/service-client test ./...",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
+  "dependencies": {
+    "@boxcompute/sdk": "^0.2.0"
+  },
   "devDependencies": {
     "@types/bun": "latest",
     "@types/node": "^26.0.0",

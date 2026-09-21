@@ -3,7 +3,7 @@
 This file records user-visible changes to the BoxCompute CLI. GitHub Releases
 use the same notes and bind them to the exact source commit.
 
-## [0.6.0] - 2026-09-20
+## [0.7.0] - 2026-09-21
 
 Forward selected TCP services from an owned running VM to local loopback.
 
@@ -23,6 +23,29 @@ Forward selected TCP services from an owned running VM to local loopback.
 - The helper and local listeners stop on parent exit and fixed expiry. The CLI
   attempts revocation on exit and clearly distinguishes an untrusted VM guest
   report from independent physical-cleanup evidence.
+
+## [0.6.0] - 2026-09-21
+
+The CLI now drives the public API through the official `@boxcompute/sdk`
+instead of its own hand-written HTTP client. Command and flag behavior is
+unchanged.
+
+### CLI users
+
+- No configuration or upgrade action beyond `bxc update` (or
+  `npm install --global @boxcompute/cli@latest`).
+- `sandbox logs` now prints the sandbox ID returned by the v2 contract in its
+  summary line; log entries show only the four fields the contract returns
+  (timestamp, stream, source, message).
+- `sandbox exec` now sends the documented `cwd`, `timeoutSeconds`, and
+  `maxOutputBytes` defaults explicitly when the matching flags are omitted;
+  results are identical to relying on the server defaults.
+
+### Security
+
+- The CLI still rejects HTTP redirects on every request, so the saved bearer
+  credential is never forwarded to a different origin, and request timeouts
+  remain bounded by the SDK.
 
 ## [0.5.0] - 2026-09-17
 

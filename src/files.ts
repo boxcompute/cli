@@ -1,8 +1,9 @@
 import { link, lstat, mkdtemp, open, rm, stat } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import { BoxComputeClient, FILE_CHUNK_BYTES, validateFilePath } from "./client.js";
+import type { BoxCompute } from "@boxcompute/sdk";
+import { FILE_CHUNK_BYTES, validateFilePath } from "./sdk.js";
 
-export async function uploadFile(client: BoxComputeClient, id: string, local: string, remote: string): Promise<number> {
+export async function uploadFile(client: BoxCompute, id: string, local: string, remote: string): Promise<number> {
   validateFilePath(remote);
   if (!(await stat(local)).isFile()) throw new Error("Upload source must be a regular file");
   const file = await open(local, "r");
@@ -19,14 +20,14 @@ export async function uploadFile(client: BoxComputeClient, id: string, local: st
       length += bytesRead;
     }
     if (length > FILE_CHUNK_BYTES) throw new Error("Uploads are limited to 8 MiB");
-    await client.upload(id, remote, buffer.subarray(0, length));
+    await client.files.write(id, remote, buffer.subarray(0, length), { timeoutMs: 30_000 });
     return length;
   } finally {
     await file.close();
   }
 }
 
-export async function downloadFile(client: BoxComputeClient, id: string, remote: string, local: string): Promise<number> {
+export async function downloadFile(client: BoxCompute, id: string, remote: string, local: string): Promise<number> {
   validateFilePath(remote);
   const target = resolve(local);
   try {
@@ -46,10 +47,15 @@ export async function downloadFile(client: BoxComputeClient, id: string, remote:
     const signal = AbortSignal.timeout(300_000);
     try {
       for (;;) {
-        const chunk = await client.readFile(id, remote, offset, cursor, signal);
-        if (size !== undefined && chunk.size !== size) throw new Error("File size changed during download; restart the download");
-        size = chunk.size;
-        await file.writeFile(chunk.bytes);
+        const chunk = await client.files.read(id, remote, {
+          offset,
+          maxBytes: FILE_CHUNK_BYTES,
+          ...(cursor !== undefined ? { cursor } : {}),
+          signal,
+        });
+        if (size !== undefined && chunk.fileSize !== size) throw new Error("File size changed during download; restart the download");
+        size = chunk.fileSize;
+        await file.writeFile(chunk.data);
         offset = chunk.nextOffset;
         cursor = chunk.nextCursor;
         if (chunk.eof) break;

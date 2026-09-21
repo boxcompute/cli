@@ -10,7 +10,7 @@ import {
 } from "node:crypto";
 import type { Readable, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
-import type { BoxComputeClient, ServiceAccessRequest, ServiceAccessResponse, ServiceCleanup } from "./client.js";
+import type { ServiceAccessApi, ServiceAccessRequest, ServiceAccessResponse, ServiceCleanup } from "./service-access.js";
 
 export type ServiceMapping = { local: number; remote: number };
 
@@ -92,7 +92,7 @@ export function unsealServices(value: ServiceAccessResponse, recipient: KeyObjec
 
 /** Bind every local IPv4-loopback port before issuing one non-renewable grant. */
 export async function openServices(
-  client: BoxComputeClient,
+  api: ServiceAccessApi,
   sandboxId: string,
   mappings: readonly ServiceMapping[],
   signal?: AbortSignal,
@@ -132,7 +132,7 @@ export async function openServices(
   child.stdin.on("error", stop);
   signal?.addEventListener("abort", stop, { once: true });
   const revoke = () => cleanup ??= generation
-    ? client.revokeServiceAccess(sandboxId, generation)
+    ? api.revokeServiceAccess(sandboxId, generation)
     : Promise.resolve(undefined);
   try {
     const bootstrap = await nativeMessage(child, { mappings: selected }, stop);
@@ -148,7 +148,7 @@ export async function openServices(
       recipient_key: recipient.publicKey.export({ format: "der", type: "spki" }).subarray(-32).toString("base64"),
       ports: selected.map(mapping => mapping.remote).sort((left, right) => left - right),
     };
-    const result = await client.createServiceAccess(sandboxId, request);
+    const result = await api.createServiceAccess(sandboxId, request);
     if (result && uuid.test(result.generation_id)) generation = result.generation_id;
     const configuration = unsealServices(result, recipient.privateKey, request);
     if (exited || stopping || signal?.aborted) throw unavailable();
