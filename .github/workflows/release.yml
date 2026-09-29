@@ -59,6 +59,7 @@ jobs:
           bun run test:native
           bun run lint
           bun run build
+          test -x dist/cli.js
           npm pack --dry-run
 
       - name: Validate release notes and production authentication
