@@ -54,6 +54,7 @@ jobs:
           bun run test:native
           bun run lint
           bun run build
+          test -x dist/cli.js
           npm pack --dry-run
 
   compatibility:
@@ -92,6 +93,7 @@ jobs:
         run: |
           bun install --frozen-lockfile
           package_file="$(npm pack --silent)"
+          tar -tvf "$package_file" | grep -Eq -- '^-rwxr-xr-x .*package/dist/cli\.js$'
           npm install --global --ignore-scripts --prefix "$RUNNER_TEMP/boxcompute-cli" "./$package_file"
           actual="$($RUNNER_TEMP/boxcompute-cli/bin/bxc --version)"
           expected="$(node --print "require('./package.json').version")"

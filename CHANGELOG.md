@@ -3,6 +3,21 @@
 This file records user-visible changes to the BoxCompute CLI. GitHub Releases
 use the same notes and bind them to the exact source commit.
 
+## [0.7.1] - 2026-09-29
+
+Restore direct execution of npm-installed CLI commands on Unix-like systems.
+
+### CLI users
+
+- `bxc` and `bcompute` installed through npm are executable directly again;
+  users no longer need to invoke the generated entry point through `node`.
+- Existing affected `0.7.0` installations can be repaired temporarily with
+  `chmod u+x "$(npm root -g)/@boxcompute/cli/dist/cli.js"` before updating.
+
+### Security
+
+No security-relevant changes.
+
 ## [0.7.0] - 2026-09-21
 
 Forward owned VM services to local loopback and open experimental cooperative SSH.
