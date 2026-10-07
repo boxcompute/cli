@@ -3,6 +3,26 @@
 This file records user-visible changes to the BoxCompute CLI. GitHub Releases
 use the same notes and bind them to the exact source commit.
 
+## [0.7.2] - 2026-10-07
+
+Restore `bxc sandbox expose` against the current BoxCompute service.
+
+### CLI users
+
+- `bxc sandbox expose` works again. Since 2026-09-22 the service has issued
+  one-hour service grants, and `0.7.0`–`0.7.1` rejected them with
+  "Service access unavailable" before opening any local listener.
+- A tunnel now stays open for up to one hour instead of five minutes. It still
+  never renews; press Ctrl+C to close it sooner and revoke the grant.
+- Update with `bxc update` or `npm install --global @boxcompute/cli@latest`.
+
+### Security
+
+- The local listener still binds only IPv4 loopback, and each grant remains
+  tied to the caller, the owned VM, one native client key, and the selected
+  ports. The client now accepts only the exact one-hour expiry the service
+  issues and refuses any longer deadline.
+
 ## [0.7.1] - 2026-09-29
 
 Restore direct execution of npm-installed CLI commands on Unix-like systems.

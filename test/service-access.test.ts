@@ -19,7 +19,7 @@ describe("service access client", () => {
     };
     const envelope = {
       generation_id: generation,
-      expires_at: request.requested_at + 300,
+      expires_at: request.requested_at + 3600,
       sealed: Buffer.alloc(96, 4).toString("base64"),
     };
     const api = serviceAccessApi(

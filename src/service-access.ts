@@ -101,7 +101,7 @@ export function serviceAccessApi(connection: Connection, fetchImpl: typeof fetch
       }
       if (Object.keys(value).sort().join() !== "expires_at,generation_id,sealed"
         || typeof value.generation_id !== "string" || !uuid.test(value.generation_id)
-        || value.expires_at !== request!.requested_at + 300 || Number(value.expires_at) <= Math.floor(Date.now() / 1000)
+        || value.expires_at !== request!.requested_at + 3600 || Number(value.expires_at) <= Math.floor(Date.now() / 1000)
         || typeof value.sealed !== "string" || value.sealed.length < 80 || value.sealed.length > 16_000
         || Buffer.from(value.sealed, "base64").toString("base64") !== value.sealed) throw unavailable();
       return value as ServiceAccessResponse;

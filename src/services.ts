@@ -54,8 +54,8 @@ export function unsealServices(value: ServiceAccessResponse, recipient: KeyObjec
   try {
     const now = Date.now() / 1_000;
     if (!value || Object.keys(value).sort().join() !== "expires_at,generation_id,sealed"
-      || !uuid.test(value.generation_id) || value.expires_at !== request.requested_at + 300
-      || value.expires_at <= now || value.expires_at > now + 330
+      || !uuid.test(value.generation_id) || value.expires_at !== request.requested_at + 3600
+      || value.expires_at <= now || value.expires_at > now + 3_630
       || typeof value.sealed !== "string" || value.sealed.length < 80 || value.sealed.length > 16_000) throw unavailable();
     const bytes = Buffer.from(value.sealed, "base64");
     if (bytes.toString("base64") !== value.sealed) throw unavailable();

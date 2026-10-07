@@ -23,7 +23,7 @@ import (
 const (
 	maxPorts    = 8
 	maxFlows    = 32
-	maxLease    = 5 * time.Minute
+	maxLease    = time.Hour
 	drainWindow = 5 * time.Second
 )
 

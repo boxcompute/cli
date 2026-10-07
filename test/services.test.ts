@@ -29,7 +29,7 @@ function seal(request: ServiceAccessRequest, change: Record<string, unknown> = {
   cipher.setAAD(Buffer.from(generation));
   const clear = JSON.stringify({
     address: "tc-test-address",
-    expires_at: request.requested_at + 300,
+    expires_at: request.requested_at + 3600,
     ports: request.ports,
     ...change,
   });
@@ -38,7 +38,7 @@ function seal(request: ServiceAccessRequest, change: Record<string, unknown> = {
   secret.fill(0);
   return {
     generation_id: generation,
-    expires_at: request.requested_at + 300,
+    expires_at: request.requested_at + 3600,
     sealed: Buffer.concat([
       sender.publicKey.export({ format: "der", type: "spki" }).subarray(-32),
       nonce,
@@ -61,7 +61,7 @@ describe("service capability envelope", () => {
     const good = seal(request);
     expect(unsealServices(good, recipient.privateKey, request)).toEqual({
       address: "tc-test-address",
-      expires_at: request.requested_at + 300,
+      expires_at: request.requested_at + 3600,
     });
     for (const bad of [
       seal(request, { ports: [3000, 9090] }),

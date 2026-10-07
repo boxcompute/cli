@@ -52,7 +52,7 @@ bxc sandbox start WORKSPACE_ID --cpu 2
 # Use the returned sandbox instance ID for later commands.
 bxc sandbox logs SANDBOX_ID --source execute
 bxc sandbox exec SANDBOX_ID -- python -m pytest
-# Forward VM port 3000 to local loopback for up to five minutes.
+# Forward VM port 3000 to local loopback for up to one hour.
 bxc sandbox expose SANDBOX_ID --port 3000
 ```
 
@@ -102,7 +102,7 @@ bxc sandbox expose SANDBOX_ID --port 8080:80 --port 5432
 ```
 
 Only `127.0.0.1` is bound. A tunnel selects at most eight unique TCP ports,
-expires after five minutes, never renews automatically, and attempts revocation
+expires after one hour, never renews automatically, and attempts revocation
 when the command exits. It does not create a public URL or expose UDP.
 
 ### Experimental Tailcat SSH
