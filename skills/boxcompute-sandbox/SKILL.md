@@ -61,8 +61,8 @@ bxc sandbox expose SANDBOX_ID --port 3000
 ```
 
 Use `--port LOCAL:REMOTE` when the local port differs, and repeat it for up to
-eight services. The listener is local IPv4 loopback only, expires after five
-minutes, never renews, and attempts revocation on exit. It is not a public URL.
+eight services. The listener is local IPv4 loopback only, expires after one
+hour, never renews, and attempts revocation on exit. It is not a public URL.
 
 ## Execute work
 

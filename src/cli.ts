@@ -148,7 +148,7 @@ Expose options:
   --port [LOCAL:]REMOTE           Repeat for up to 8 unique ports. The local
                                   port defaults to the remote port.
 
-  Expose binds only 127.0.0.1, lasts at most five minutes, never renews, and
+  Expose binds only 127.0.0.1, lasts at most one hour, never renews, and
   attempts to revoke the grant when it exits. Run it again for a new lease.
 
 SSH options:
