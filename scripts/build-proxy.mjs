@@ -1,4 +1,4 @@
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
@@ -7,9 +7,13 @@ import { join } from "node:path";
 const source = fileURLToPath(new URL("../native/connection-proxy/", import.meta.url));
 const output = fileURLToPath(new URL("../dist/native/", import.meta.url));
 const licenseRoot = fileURLToPath(new URL("../dist/native-licenses/", import.meta.url));
-rmSync(output, { recursive: true, force: true });
-rmSync(licenseRoot, { recursive: true, force: true });
+// build:native runs both helper builds into the same directories, so remove
+// only this helper's binaries and license inventory, never the other's.
 mkdirSync(output, { recursive: true });
+for (const name of readdirSync(output)) {
+  if (name.startsWith("boxcompute-proxy-")) rmSync(join(output, name), { force: true });
+}
+rmSync(join(licenseRoot, "connection-proxy"), { recursive: true, force: true });
 mkdirSync(licenseRoot, { recursive: true });
 const tools = mkdtempSync(join(tmpdir(), "bxc-package-tools-"));
 const hostEnv = {
@@ -39,7 +43,7 @@ try {
       chmodSync(`${output}boxcompute-proxy-${platform}-${arch}`, 0o755);
       const licenses = spawnSync(
         join(tools, "go-licenses"),
-        ["save", ".", "--save_path", join(licenseRoot, `${platform}-${arch}`), "--ignore", "github.com/boxcompute/cli", "--force"],
+        ["save", ".", "--save_path", join(licenseRoot, "connection-proxy", `${platform}-${arch}`), "--ignore", "github.com/boxcompute/cli", "--force"],
         { cwd: source, env: targetEnv, stdio: "inherit" },
       );
       if (licenses.error || licenses.status !== 0) throw new Error(`Could not collect licenses for ${platform}/${arch}`);

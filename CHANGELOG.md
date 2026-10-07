@@ -10,6 +10,11 @@ identity, costs, analytics, deleted-sandbox history, and the API audit log.
 
 ### CLI users
 
+- `bxc sandbox expose` now works from npm installs. Every release since
+  `0.7.0` shipped without the native service helper that expose needs, because
+  the connection-proxy build deleted it while packaging. `0.7.2` fixed the
+  one-hour lease but still had this problem. CI now fails if any native helper
+  is missing from the package.
 - `bxc sandbox preview SANDBOX_ID --port 3000` opens a one-hour HTTP/WebSocket
   preview URL for a running, network-enabled VM; `--close PREVIEW_ID` closes it
   sooner.

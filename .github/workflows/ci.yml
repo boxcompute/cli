@@ -94,6 +94,12 @@ jobs:
           bun install --frozen-lockfile
           package_file="$(npm pack --silent)"
           tar -tvf "$package_file" | grep -Eq -- '^-rwxr-xr-x .*package/dist/cli\.js$'
+          for helper in service proxy; do
+            for target in linux-x64 linux-arm64 darwin-x64 darwin-arm64; do
+              tar -tvf "$package_file" | grep -Eq -- "^-rwxr-xr-x .*package/dist/native/boxcompute-$helper-$target\$" \
+                || { echo "missing native helper boxcompute-$helper-$target" >&2; exit 1; }
+            done
+          done
           npm install --global --ignore-scripts --prefix "$RUNNER_TEMP/boxcompute-cli" "./$package_file"
           actual="$($RUNNER_TEMP/boxcompute-cli/bin/bxc --version)"
           expected="$(node --print "require('./package.json').version")"
