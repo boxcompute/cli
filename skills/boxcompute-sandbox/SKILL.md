@@ -33,7 +33,7 @@ creation receipt immediately. Use `--gvisor` for a container sandbox instead.
 Never change keys to recover a stuck create.
 
 VMs are sized at create with `--size small|large` (default `small`): small is
-0.5 CPU / 1024 MiB RAM and large is 1.5 CPU / 3072 MiB RAM, both with a 10 GiB
+0.5 CPU / 1024 MiB RAM and large is 1.5 CPU / 3072 MiB RAM, both with a 30 GiB
 workspace. Sizing is VM only: gVisor ignores `small` and rejects `large`, and
 VM sizing is mutually exclusive with `--cpu`. Use `--size large` only when the
 task needs more than the default profile; it bills more. VMs have outbound
@@ -63,6 +63,16 @@ bxc sandbox expose SANDBOX_ID --port 3000
 Use `--port LOCAL:REMOTE` when the local port differs, and repeat it for up to
 eight services. The listener is local IPv4 loopback only, expires after one
 hour, never renews, and attempts revocation on exit. It is not a public URL.
+
+Only when the user asks for a shareable browser link, open a one-hour preview
+instead and give them the printed URL:
+
+```sh
+bxc sandbox preview SANDBOX_ID --port 3000
+```
+
+The URL is a bearer link that anyone can use until it expires, so close it with
+`bxc sandbox preview SANDBOX_ID --close PREVIEW_ID` when the user is done.
 
 ## Execute work
 

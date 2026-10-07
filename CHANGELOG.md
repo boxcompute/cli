@@ -3,6 +3,41 @@
 This file records user-visible changes to the BoxCompute CLI. GitHub Releases
 use the same notes and bind them to the exact source commit.
 
+## [0.8.0] - 2026-10-07
+
+Bring the CLI up to date with the public BoxCompute API: browser previews,
+identity, costs, analytics, deleted-sandbox history, and the API audit log.
+
+### CLI users
+
+- `bxc sandbox preview SANDBOX_ID --port 3000` opens a one-hour HTTP/WebSocket
+  preview URL for a running, network-enabled VM; `--close PREVIEW_ID` closes it
+  sooner.
+- `bxc whoami` shows the account and API key behind the saved credential.
+- `bxc costs` reports settled and in-progress compute cost per sandbox, with
+  `--from`, `--to`, and `--api-key` filters. `bxc sandbox costs SANDBOX_ID`
+  lists every charged run of one sandbox.
+- `bxc sandbox analytics SANDBOX_ID` summarizes lifecycle and operation
+  analytics; add `--json` for the full resource time series.
+- `bxc deleted list`, `bxc deleted logs DELETED_ID`, and
+  `bxc deleted costs DELETED_ID` read the retained history of deleted
+  sandboxes.
+- `bxc audit` pages the account's API audit log with type, outcome, method,
+  API key, resource, and time filters.
+- VM documentation now states the 30 GiB thin-provisioned workspace for both
+  sizes.
+- The CLI now requires `@boxcompute/sdk` 0.3.0. Update with `bxc update` or
+  `npm install --global @boxcompute/cli@latest`.
+
+### Security
+
+- Preview URLs are bearer links: anyone holding one can reach the selected VM
+  port until it expires after one hour or is closed. The bundled skill tells
+  agents to open a preview only when the user asks for a shareable link.
+- All new commands are read-only except `sandbox preview`, and every request
+  still rejects HTTP redirects so the saved credential is never forwarded to
+  another origin.
+
 ## [0.7.2] - 2026-10-07
 
 Restore `bxc sandbox expose` against the current BoxCompute service.
