@@ -31,7 +31,7 @@ sizing (`size`) added September 17, 2026.
 | --- | --- |
 | Availability | Any authenticated account. No separate VM approval. |
 | Selection | Omitted `vmSandbox` selects the VM runtime (the default); `vmSandbox: false` explicitly selects a gVisor container sandbox. Rejected VM requests do not fall back to that path. |
-| Resources | Sizing is chosen at create with `size`. `small` (default) is 500m CPU (0.5 CPU), 1,024 MiB RAM; `large` is 1,536m CPU (1.5 CPU), 3,072 MiB RAM. Both get a 10 GiB workspace. |
+| Resources | Sizing is chosen at create with `size`. `small` (default) is 500m CPU (0.5 CPU), 1,024 MiB RAM; `large` is 1,536m CPU (1.5 CPU), 3,072 MiB RAM. Both get a 30 GiB thin-provisioned workspace. |
 | Lifetime | No automatic expiry. The VM exists, and bills for active use, until you delete it. |
 | Image | Immutable, server-selected approved minimal Ubuntu image. No arbitrary image override, library profile, or attached volumes. |
 | User/runtime | Unprivileged user; `HOME=/workspace`. No sudo/root installation or SSH login. Check that your required executables are available; Node.js, uv and your tool's dependencies are not guaranteed. |

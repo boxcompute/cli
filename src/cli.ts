@@ -9,8 +9,15 @@ import {
   BoxCompute,
   BoxComputeError,
   BoxComputeTransportError,
+  type AuditEventPage,
+  type DeletedSandbox,
   type ExecutionResult,
+  type Me,
+  type Preview,
   type Sandbox,
+  type SandboxAnalytics,
+  type SandboxCostDetail,
+  type SandboxCostReport,
   type SandboxLogs,
   type Workspace,
 } from "@boxcompute/sdk";
@@ -53,6 +60,7 @@ Commands:
   auth                            [alias: login] Authentication commands
     logout                        Revoke and remove the saved CLI credential
   doctor                          Verify the saved connection
+  whoami                          Show the account and API key behind the saved credential
   workspaces                      List workspaces that can own sandboxes
   sandboxes                       [aliases: list, ls] List sandbox instances
   sandbox                         Manage isolated BoxCompute sandboxes
@@ -61,10 +69,16 @@ Commands:
     logs                          Read current or retained sandbox logs
     exec                          Execute a program inside a sandbox
     expose                        Forward selected TCP ports to local loopback
+    preview                       Open or close a one-hour browser preview URL
     ssh                           Open experimental lease-limited SSH
     upload                        Upload a local file (up to 8 MiB)
     download                      Download a complete file to a new local path
+    analytics                     Read lifecycle, operation, and resource analytics
+    costs                         List every charged run of one sandbox
     delete                        [alias: rm] Destroy the runtime; the workspace remains
+  deleted                         Read deleted sandboxes, their logs, and their costs
+  costs                           Compute cost per API key and per sandbox
+  audit                           Page the account's API audit log
   skill                           [alias: skills] Manage coding-harness skills
     detect                        Detect compatible coding harnesses
     list                          [alias: ls] List detected or installed harnesses
@@ -96,6 +110,9 @@ Examples:
   $ bxc sandbox logs SANDBOX_ID --source execute
   $ bxc sandbox exec SANDBOX_ID -- python -m pytest
   $ bxc sandbox expose SANDBOX_ID --port 3000
+  $ bxc sandbox preview SANDBOX_ID --port 3000
+  $ bxc costs --from 2026-10-01T00:00:00Z
+  $ bxc audit --outcome error
   $ BOXCOMPUTE_ENABLE_SSH=1 bxc sandbox ssh SANDBOX_ID
 
 Compatibility:
@@ -116,6 +133,11 @@ Commands:
                                   Execute a program inside a sandbox
   expose SANDBOX_ID --port [LOCAL:]REMOTE
                                   Forward up to 8 TCP ports to 127.0.0.1
+  preview SANDBOX_ID --port PORT  Open a one-hour HTTP/WebSocket preview URL for a VM port
+  preview SANDBOX_ID --close PREVIEW_ID
+                                  Close a preview before it expires
+  analytics SANDBOX_ID [options]  Read lifecycle, operation, and resource analytics
+  costs SANDBOX_ID                List every charged run with a running estimate
   ssh SANDBOX_ID [options]        Open experimental non-PTY SSH for up to 30 seconds
   delete SANDBOX_ID --yes         [alias: rm] Destroy the runtime; keep the workspace
   upload SANDBOX_ID LOCAL REMOTE  Upload raw bytes under /workspace (up to 8 MiB)
@@ -151,6 +173,22 @@ Expose options:
   Expose binds only 127.0.0.1, lasts at most one hour, never renews, and
   attempts to revoke the grant when it exits. Run it again for a new lease.
 
+Preview options:
+
+  --port PORT                     VM port to publish (1–65535)
+  --close PREVIEW_ID              Close the preview instead of opening one
+
+  A preview URL is a bearer link: anyone holding it can reach the port until it
+  expires after one hour or is closed. Each VM has at most one preview at a time.
+  The VM must be owned, running, and network-enabled.
+
+Analytics options:
+
+  --from TIMESTAMP                Window start (RFC 3339)
+  --to TIMESTAMP                  Window end (RFC 3339)
+  --resolution SECONDS            Bucket width, 60–86400 (default: 300)
+  --generation N                  Select one runtime generation
+
 SSH options:
 
   --reconnect                     Verify one same-envelope reconnect after SSH exits
@@ -174,6 +212,63 @@ Log options:
   --source workload|execute|process
                                   Filter by log source
   --limit ENTRIES                 Maximum entries (default: 1000, max: 5000)
+`;
+
+const deletedHelp = `Read deleted sandboxes
+
+Usage: bxc deleted <command> [options]
+
+Commands:
+
+  list                            [alias: ls] List deleted sandboxes, newest first
+  logs DELETED_ID [options]       Read a deleted sandbox's retained logs
+  costs DELETED_ID                List every charged run of a deleted sandbox
+
+  DELETED_ID is the first column of \`bxc deleted list\`, not the sandbox ID.
+
+Log options:
+
+  --runtime RUNTIME               Read an earlier runtime (default: most recent)
+  --since TIMESTAMP               Include entries at or after an RFC 3339 time
+  --until TIMESTAMP               Include entries before an RFC 3339 time
+  --stream stdout|stderr          Filter by output stream
+  --source workload|execute|process
+                                  Filter by log source
+  --limit ENTRIES                 Maximum entries (default: 1000, max: 5000)
+`;
+
+const costsHelp = `Compute cost per API key and per sandbox
+
+Usage: bxc costs [options]
+
+Options:
+
+  --from TIMESTAMP                Window start (RFC 3339; default: 30 days ago)
+  --to TIMESTAMP                  Window end (RFC 3339; default: now)
+  --api-key API_KEY_ID            Restrict to one API key, or \`none\` for
+                                  sandboxes not created with an API key
+
+  Settled amounts are exact charges for runs that ended in the window; estimates
+  cover runs still in progress. Deleted sandboxes are included. Billing is per
+  second with a 60-second minimum per run.
+`;
+
+const auditHelp = `Page the account's API audit log, newest first
+
+Usage: bxc audit [options]
+
+Options:
+
+  --type TYPE                     api.request, api_key.created, api_key.revoked,
+                                  or api_key.rejected
+  --outcome success|error         Filter by request outcome
+  --method METHOD                 GET, HEAD, POST, PUT, PATCH, or DELETE
+  --api-key API_KEY_ID            Filter by API key
+  --resource RESOURCE_ID          Filter by resource, such as a sandbox ID
+  --from TIMESTAMP                Window start (RFC 3339)
+  --to TIMESTAMP                  Window end (RFC 3339)
+  --before CURSOR                 Continue from a previous page's cursor
+  --limit EVENTS                  Page size (default: 50, max: 200)
 `;
 
 const skillHelp = `Manage coding-harness skills
@@ -597,6 +692,155 @@ function logsOutput(io: Io, json: boolean, logs: SandboxLogs): number {
   return 0;
 }
 
+const isoTime = (milliseconds: number | null | undefined) =>
+  milliseconds === null || milliseconds === undefined ? "-" : new Date(milliseconds).toISOString();
+const usd = (micros: number) => `$${(micros / 1_000_000).toFixed(4)}`;
+
+function meOutput(io: Io, json: boolean, me: Me): number {
+  const identity = me.account.email ?? me.account.name ?? me.account.id;
+  emit(
+    io,
+    json,
+    me,
+    `${identity}\taccount=${me.account.id}\n` +
+      `API key ${me.apiKey.name}\t${me.apiKey.id}\tscopes=${me.apiKey.scopes.join(",")}\n`,
+  );
+  return 0;
+}
+
+function costReportOutput(io: Io, json: boolean, report: SandboxCostReport): number {
+  if (json) {
+    emit(io, true, { costs: report }, "");
+    return 0;
+  }
+  if (!report.sandboxes.length) write(io.stdout, "No charged sandbox runs in this window.\n");
+  for (const item of report.sandboxes) {
+    write(
+      io.stdout,
+      `${item.sandboxId}\t${item.name}\truns=${item.runs}\tbillableSeconds=${item.billableSeconds}` +
+        `\tsettled=${usd(item.settledMicros)}\testimated=${usd(item.estimatedMicros)}` +
+        `${item.deleted ? "\tdeleted" : ""}\n`,
+    );
+  }
+  write(
+    io.stderr,
+    `window=${isoTime(report.from)}..${isoTime(report.to)} runs=${report.totals.runs}` +
+      ` settled=${usd(report.totals.settledMicros)} estimated=${usd(report.totals.estimatedMicros)}` +
+      ` estimates=${report.estimates}\n`,
+  );
+  return 0;
+}
+
+function costDetailOutput(io: Io, json: boolean, detail: SandboxCostDetail): number {
+  if (json) {
+    emit(io, true, { costs: detail }, "");
+    return 0;
+  }
+  if (!detail.runs.length && !detail.running.length) write(io.stdout, "No charged runs.\n");
+  for (const run of detail.runs) {
+    write(
+      io.stdout,
+      `${isoTime(run.startedAt)}\t${isoTime(run.endedAt)}\tbillableSeconds=${run.billableSeconds}\t${usd(run.amountMicros)}\n`,
+    );
+  }
+  for (const run of detail.running) {
+    write(
+      io.stdout,
+      `${isoTime(run.startedAt)}\trunning\tbillableSeconds=${run.billableSeconds}\t~${usd(run.estimatedMicros)}\n`,
+    );
+  }
+  write(
+    io.stderr,
+    `sandbox=${detail.sandbox.sandboxId} runs=${detail.sandbox.runs} settled=${usd(detail.sandbox.settledMicros)}` +
+      ` estimated=${usd(detail.sandbox.estimatedMicros)}${detail.truncated ? " truncated=true" : ""}\n`,
+  );
+  return 0;
+}
+
+function auditOutput(io: Io, json: boolean, page: AuditEventPage): number {
+  if (json) {
+    emit(io, true, page, "");
+    return 0;
+  }
+  if (!page.events.length) write(io.stdout, "No audit events found.\n");
+  for (const event of page.events) {
+    const request = event.request
+      ? `${event.request.method} ${event.request.path}\t${event.request.status}`
+      : "-\t-";
+    write(io.stdout, `${isoTime(event.createdAt)}\t${event.type}\t${request}\t${event.resourceId ?? "-"}\n`);
+  }
+  if (page.nextCursor) write(io.stderr, `More events: bxc audit --before ${page.nextCursor}\n`);
+  return 0;
+}
+
+function deletedLine(sandbox: DeletedSandbox): string {
+  return `${sandbox.id}\t${sandbox.sandboxId}\t${sandbox.name}\tdeleted=${isoTime(sandbox.deletedAt)}\n`;
+}
+
+function analyticsOutput(io: Io, json: boolean, analytics: SandboxAnalytics): number {
+  if (json) {
+    emit(io, true, { analytics }, "");
+    return 0;
+  }
+  for (const generation of analytics.generations) {
+    write(
+      io.stdout,
+      `generation=${generation.generation}\t${generation.runtimeClass}\tstarted=${isoTime(generation.startedAt)}` +
+        `\tstopped=${isoTime(generation.stoppedAt)}\n`,
+    );
+  }
+  const totals = analytics.operations.reduce(
+    (sum, bucket) => ({
+      operations: sum.operations + bucket.operations,
+      executions: sum.executions + bucket.executions,
+      failures: sum.failures + bucket.failures,
+    }),
+    { operations: 0, executions: 0, failures: 0 },
+  );
+  write(
+    io.stdout,
+    `operations=${totals.operations}\texecutions=${totals.executions}\tfailures=${totals.failures}\n`,
+  );
+  write(
+    io.stderr,
+    `sandbox=${analytics.sandboxId} window=${isoTime(analytics.from)}..${isoTime(analytics.to)}` +
+      ` resolutionSeconds=${analytics.resolutionSeconds} resources=${analytics.resources.status}` +
+      ` (use --json for time series)\n`,
+  );
+  return 0;
+}
+
+function previewOutput(io: Io, json: boolean, preview: Preview): number {
+  emit(io, json, { preview }, `${preview.url}\n`);
+  if (!json) {
+    write(
+      io.stderr,
+      `Preview ${preview.previewId} for port ${preview.port} expires at ${preview.expiresAt}. ` +
+        `Anyone with the URL can reach it; close it sooner with ` +
+        `'bxc sandbox preview ${preview.sandboxId} --close ${preview.previewId}'.\n`,
+    );
+  }
+  return 0;
+}
+
+function logFilters(args: string[]) {
+  const since = timestamp(option(args, "since"), "--since");
+  const until = timestamp(option(args, "until"), "--until");
+  const stream = oneOf(option(args, "stream"), "--stream", ["stdout", "stderr"] as const);
+  const source = oneOf(option(args, "source"), "--source", ["workload", "execute", "process"] as const);
+  const limit = positive(option(args, "limit"), "--limit");
+  if (limit !== undefined && limit > 5_000) throw new UsageError("--limit must be 5000 or fewer");
+  if (since && until && since >= until) throw new UsageError("--since must be earlier than --until");
+  return { since, until, stream, source, limit };
+}
+
+function timeWindow(args: string[]) {
+  const from = timestamp(option(args, "from"), "--from");
+  const to = timestamp(option(args, "to"), "--to");
+  if (from && to && from >= to) throw new UsageError("--from must be earlier than --to");
+  return { from, to };
+}
+
 export async function runCli(argv: string[], supplied: CliDependencies = {}): Promise<number> {
   const env = supplied.env ?? process.env;
   const io: Io = supplied.io ?? { stdin: process.stdin, stdout: process.stdout, stderr: process.stderr };
@@ -766,6 +1010,7 @@ export async function runCli(argv: string[], supplied: CliDependencies = {}): Pr
     write(io.stdout, sandboxHelp);
     return 0;
   }
+  if (command === "deleted" && !args.length) args.push("list");
 
   const connection = await load(env);
   const client = createClient(connection, fetchImpl);
@@ -779,6 +1024,55 @@ export async function runCli(argv: string[], supplied: CliDependencies = {}): Pr
     const sandboxes = await client.sandboxes.list();
     emit(io, json, { sandboxes }, sandboxes.length ? sandboxes.map(sandboxLine).join("") : "No sandboxes found. Start one for a BoxCompute workspace first.\n");
     return 0;
+  }
+  if (command === "whoami") {
+    if (args.length) throw new UsageError("whoami takes no options");
+    return meOutput(io, json, await client.me.get());
+  }
+  if (command === "costs") {
+    const window = timeWindow(args);
+    const apiKeyId = option(args, "api-key");
+    if (args.length) throw new UsageError(`Unknown costs option: ${args[0]}`);
+    return costReportOutput(io, json, await client.costs.sandboxes({ ...window, apiKeyId }));
+  }
+  if (command === "audit") {
+    const type = oneOf(option(args, "type"), "--type", [
+      "api.request", "api_key.created", "api_key.revoked", "api_key.rejected",
+    ] as const);
+    const outcome = oneOf(option(args, "outcome"), "--outcome", ["success", "error"] as const);
+    const method = oneOf(option(args, "method"), "--method", ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"] as const);
+    const apiKeyId = option(args, "api-key");
+    const resourceId = option(args, "resource");
+    const before = option(args, "before");
+    const limit = positive(option(args, "limit"), "--limit");
+    if (limit !== undefined && limit > 200) throw new UsageError("--limit must be 200 or fewer");
+    const window = timeWindow(args);
+    if (args.length) throw new UsageError(`Unknown audit option: ${args[0]}`);
+    return auditOutput(io, json, await client.auditEvents.list({
+      type, outcome, method, apiKeyId, resourceId, before, limit, ...window,
+    }));
+  }
+  if (command === "deleted") {
+    let action = args.shift();
+    if (action === "ls") action = "list";
+    if (action === "list") {
+      if (args.length) throw new UsageError("deleted list takes no options");
+      const deleted = await client.deletedSandboxes.list();
+      emit(io, json, { deletedSandboxes: deleted }, deleted.length ? deleted.map(deletedLine).join("") : "No deleted sandboxes found.\n");
+      return 0;
+    }
+    const id = args.shift();
+    if (!id || (action !== "logs" && action !== "costs")) {
+      throw new UsageError("deleted requires `list`, `logs DELETED_ID`, or `costs DELETED_ID`");
+    }
+    if (action === "costs") {
+      if (args.length) throw new UsageError("deleted costs takes one deleted sandbox ID");
+      return costDetailOutput(io, json, await client.deletedSandboxes.costs(id));
+    }
+    const runtime = option(args, "runtime");
+    const filters = logFilters(args);
+    if (args.length) throw new UsageError(`Unknown deleted logs option: ${args[0]}`);
+    return logsOutput(io, json, await client.deletedSandboxes.logs(id, { ...filters, runtime }));
   }
   if (command === "workspaces") {
     if (args.length) throw new UsageError("workspaces takes no options");
@@ -851,15 +1145,38 @@ export async function runCli(argv: string[], supplied: CliDependencies = {}): Pr
     return 0;
   }
   if (action === "logs") {
-    const since = timestamp(option(args, "since"), "--since");
-    const until = timestamp(option(args, "until"), "--until");
-    const stream = oneOf(option(args, "stream"), "--stream", ["stdout", "stderr"] as const);
-    const source = oneOf(option(args, "source"), "--source", ["workload", "execute", "process"] as const);
-    const limit = positive(option(args, "limit"), "--limit");
-    if (limit !== undefined && limit > 5_000) throw new UsageError("--limit must be 5000 or fewer");
-    if (since && until && since >= until) throw new UsageError("--since must be earlier than --until");
+    const filters = logFilters(args);
     if (args.length) throw new UsageError(`Unknown sandbox logs option: ${args[0]}`);
-    return logsOutput(io, json, await client.sandboxes.logs(id, { since, until, stream, source, limit }));
+    return logsOutput(io, json, await client.sandboxes.logs(id, filters));
+  }
+  if (action === "costs") {
+    if (args.length) throw new UsageError("sandbox costs takes one sandbox ID");
+    return costDetailOutput(io, json, await client.sandboxes.costs(id));
+  }
+  if (action === "analytics") {
+    const window = timeWindow(args);
+    const resolutionSeconds = positive(option(args, "resolution"), "--resolution");
+    if (resolutionSeconds !== undefined && (resolutionSeconds < 60 || resolutionSeconds > 86_400)) {
+      throw new UsageError("--resolution must be from 60 to 86400 seconds");
+    }
+    const generation = positive(option(args, "generation"), "--generation");
+    if (args.length) throw new UsageError(`Unknown sandbox analytics option: ${args[0]}`);
+    return analyticsOutput(io, json, await client.sandboxes.analytics(id, { ...window, resolutionSeconds, generation }));
+  }
+  if (action === "preview") {
+    const close = option(args, "close");
+    const port = positive(option(args, "port"), "--port");
+    if (args.length) throw new UsageError(`Unknown sandbox preview option: ${args[0]}`);
+    if ((close === undefined) === (port === undefined)) {
+      throw new UsageError("sandbox preview requires exactly one of --port PORT or --close PREVIEW_ID");
+    }
+    if (close !== undefined) {
+      await client.previews.close(id, close);
+      emit(io, json, { sandboxId: id, previewId: close, closed: true }, `Closed preview ${close} for ${id}.\n`);
+      return 0;
+    }
+    if (port! > 65_535) throw new UsageError("--port must be an integer from 1 to 65535");
+    return previewOutput(io, json, await client.previews.create(id, { port: port! }));
   }
   if (action === "expose") {
     if (json) throw new UsageError("sandbox expose is a foreground stream and does not support --json");
@@ -942,6 +1259,9 @@ function removalStatus(status: "removed" | "missing"): string {
 function helpFor(command?: string): string {
   if (command === "sandbox") return sandboxHelp;
   if (command === "skill" || command === "skills") return skillHelp;
+  if (command === "deleted") return deletedHelp;
+  if (command === "costs") return costsHelp;
+  if (command === "audit") return auditHelp;
   return rootHelp;
 }
 

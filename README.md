@@ -82,8 +82,9 @@ bxc sandbox delete SANDBOX_ID --yes
 
 See [Test tools in a VM sandbox](docs/vm-sandbox-beta.md) for the CLI and API
 walkthroughs, retry recovery, and Hermes limitations. VMs default to the
-`small` profile (0.5 CPU, 1024 MiB memory, 10 GiB workspace) and `--size large`
-selects the 3x profile (1.5 CPU, 3072 MiB memory). Sizing is VM only: the
+`small` profile (0.5 CPU, 1024 MiB memory) and `--size large` selects the 3x
+profile (1.5 CPU, 3072 MiB memory). Both use a 30 GiB thin-provisioned
+workspace. Sizing is VM only: the
 gVisor runtime ignores `small` and rejects `large`. VMs have outbound Internet
 access by default, no automatic lifetime expiry, and no SSH access; delete them
 when done because active VMs keep billing. Uploads are limited to 8 MiB;
@@ -104,6 +105,40 @@ bxc sandbox expose SANDBOX_ID --port 8080:80 --port 5432
 Only `127.0.0.1` is bound. A tunnel selects at most eight unique TCP ports,
 expires after one hour, never renews automatically, and attempts revocation
 when the command exits. It does not create a public URL or expose UDP.
+
+### Browser previews
+
+To share an HTTP or WebSocket service without a local tunnel, open a one-hour
+preview URL for one port of a running, network-enabled VM:
+
+```sh
+bxc sandbox preview SANDBOX_ID --port 3000
+bxc sandbox preview SANDBOX_ID --close PREVIEW_ID
+```
+
+The URL is a bearer link: anyone who has it can reach that port until it
+expires or is closed. Each VM has at most one preview at a time.
+
+### Account, costs, and history
+
+```sh
+# Confirm which account and API key the saved credential belongs to.
+bxc whoami
+# Settled and in-progress compute cost per sandbox (default: last 30 days).
+bxc costs --from 2026-10-01T00:00:00Z
+bxc sandbox costs SANDBOX_ID
+# Lifecycle, operation, and resource analytics; use --json for time series.
+bxc sandbox analytics SANDBOX_ID --resolution 60
+# Deleted sandboxes keep read-only logs and cost history.
+bxc deleted list
+bxc deleted logs DELETED_ID --source execute
+bxc deleted costs DELETED_ID
+# Page the account's API audit log, newest first.
+bxc audit --outcome error
+```
+
+`DELETED_ID` is the first column of `bxc deleted list`, not the original
+sandbox ID.
 
 ### Experimental Tailcat SSH
 
