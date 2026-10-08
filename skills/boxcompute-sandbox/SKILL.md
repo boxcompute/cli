@@ -32,6 +32,13 @@ retry, and save the returned ID even when pending. `--no-wait` returns the
 creation receipt immediately. Use `--gvisor` for a container sandbox instead.
 Never change keys to recover a stuck create.
 
+With CLI 0.9.0+, use `bxc --json sandbox resume SANDBOX_ID` when the task
+requires starting an existing stopped sandbox. This retains the same VM disk
+and files and resumes compute billing. It waits up to 180 seconds; `--no-wait`
+returns the receipt. An optional `--idempotency-key KEY` is reusable for the
+same resume request. Inspect status after an uncertain response; never create
+a replacement as a resume fallback. Do not wake compute for read-only status.
+
 VMs are sized at create with `--size small|large` (default `small`): small is
 0.5 CPU / 1024 MiB RAM and large is 1.5 CPU / 3072 MiB RAM, both with a 30 GiB
 workspace. Sizing is VM only: gVisor ignores `small` and rejects `large`, and
