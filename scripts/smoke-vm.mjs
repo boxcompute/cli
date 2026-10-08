@@ -20,6 +20,12 @@ const dependencies = {
   fetch: async (input, init) => {
     const url = new URL(input);
     assert.equal(new Headers(init.headers).get("authorization"), "Bearer test-token");
+    if (url.pathname === "/api/v2/sandboxes/sbx_vm/start") {
+      assert.equal(init.method, "POST");
+      assert.equal(init.redirect, "error");
+      assert.deepEqual(JSON.parse(init.body), {});
+      return Response.json({ sandbox: { id: "sbx_vm", vmSandbox: true, state: "pending" } }, { status: 201 });
+    }
     if (init.method === "POST") {
       const body = JSON.parse(init.body);
       if (body.workspaceId === "ws_large") {
@@ -64,6 +70,8 @@ const dependencies = {
   },
 };
 try {
+  assert.equal(await runCli(["--json", "sandbox", "resume", "sbx_vm"], dependencies), 0);
+  assert.equal(JSON.parse(io.stdout.read().toString()).sandbox.state, "running");
   assert.equal(await runCli(["--json", "sandbox", "start", "ws_test", "--vm", "--idempotency-key", "saved-key"], dependencies), 0);
   assert.equal(JSON.parse(io.stdout.read().toString()).sandbox.state, "running");
   assert.equal(await runCli(["--json", "sandbox", "start", "ws_default"], dependencies), 0);

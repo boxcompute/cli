@@ -44,6 +44,7 @@ import { openServices, type ServiceMapping } from "./services.js";
 import { runProxy } from "./proxy.js";
 import { runSsh } from "./ssh.js";
 import { cooperativeConnectionApi } from "./cooperative-connection.js";
+import { resumeSandbox } from "./resume.js";
 
 const DEFAULT_URL = "https://app.boxcompute.ai";
 const CLI_VERSION = (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version;
@@ -65,6 +66,7 @@ Commands:
   sandboxes                       [aliases: list, ls] List sandbox instances
   sandbox                         Manage isolated BoxCompute sandboxes
     start                         Create and start a workspace sandbox
+    resume                        Start an existing sandbox with its retained files
     status                        Inspect one sandbox
     logs                          Read current or retained sandbox logs
     exec                          Execute a program inside a sandbox
@@ -127,6 +129,7 @@ Usage: bxc sandbox <command> [options]
 Commands:
 
   start WORKSPACE_ID              Create and start a new sandbox instance
+  resume SANDBOX_ID               Start an existing sandbox; retain its disk and files
   status SANDBOX_ID               Inspect one sandbox
   logs SANDBOX_ID [options]       Read logs without starting the runtime
   exec SANDBOX_ID [options] -- PROGRAM [ARG...]
@@ -164,6 +167,14 @@ Start options:
   reports its state either way. No automatic retries or replacement VMs.
   Transfers never retry; downloads stop after five minutes and discard partial
   output on failure.
+
+Resume options:
+
+  --idempotency-key KEY           Optional saved retry key for this resume
+  --no-wait                       Return the start receipt without waiting
+
+  Resume keeps the existing sandbox ID, disk and files. Running compute resumes
+  billing. It waits up to 180 seconds; inspect status after an uncertain response.
 
 Expose options:
 
@@ -1086,6 +1097,19 @@ export async function runCli(argv: string[], supplied: CliDependencies = {}): Pr
   if (action === "rm") action = "delete";
   const id = args.shift();
   if (!action || !id) throw new UsageError("sandbox requires an action and sandbox ID");
+  if (action === "resume") {
+    const key = option(args, "idempotency-key");
+    const noWait = flag(args, "no-wait");
+    if (args.length) throw new UsageError(`Unknown sandbox resume option: ${args[0]}`);
+    let sandbox = await resumeSandbox(connection, fetchImpl, id, key);
+    if (sandbox.state === "pending" && !noWait) {
+      write(io.stderr, `Sandbox ${id} is pending; waiting up to ${SANDBOX_READY_TIMEOUT_MS / 1000} seconds for running...\n`);
+      sandbox = (await awaitRunning(client, id, sleep, now)).sandbox;
+    }
+    emit(io, json, { sandbox }, sandboxLine(sandbox));
+    if (sandbox.state !== "running") write(io.stderr, "Resume receipt only. Inspect this sandbox's status before retrying.\n");
+    return sandbox.state === "running" || (noWait && sandbox.state === "pending") ? 0 : 1;
+  }
   if (action === "start") {
     const cpu = schedulerCpu(option(args, "cpu"));
     const vmSandbox = flag(args, "vm");

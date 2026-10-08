@@ -3,6 +3,17 @@
 This file records user-visible changes to the BoxCompute CLI. GitHub Releases
 use the same notes and bind them to the exact source commit.
 
+## [0.9.0] - 2026-10-09
+
+Resume a stopped sandbox with `bxc sandbox resume SANDBOX_ID`. The existing
+VM disk and files stay in place; running compute resumes billing. The command
+waits up to 180 seconds for readiness, or returns the receipt with `--no-wait`.
+An optional `--idempotency-key` binds retries to the same request. Uncertain
+responses never trigger an automatic retry or replacement VM.
+
+The command uses the existing owner-checked public start endpoint and saved
+CLI credential. Redirects are refused and credentials stay out of output.
+
 ## [0.8.0] - 2026-10-07
 
 Bring the CLI up to date with the public BoxCompute API: browser previews,

@@ -72,6 +72,8 @@ bxc --json sandbox start WORKSPACE_ID --vm --idempotency-key SAVED_UNIQUE_KEY --
 # Triple the default VM profile (1.5 CPU, 3072 MiB). VM only.
 bxc --json sandbox start WORKSPACE_ID --vm --idempotency-key SAVED_UNIQUE_KEY --size large
 bxc --json sandbox status SANDBOX_ID
+# Resume the same stopped sandbox, retaining its disk and files.
+bxc --json sandbox resume SANDBOX_ID
 # Container sandbox instead (supports --cpu); explicit gVisor opt-out.
 bxc sandbox start WORKSPACE_ID --gvisor --cpu 2
 bxc sandbox upload SANDBOX_ID fixture.txt /workspace/fixture.txt
@@ -89,6 +91,11 @@ gVisor runtime ignores `small` and rejects `large`. VMs have outbound Internet
 access by default, no automatic lifetime expiry, and no SSH access; delete them
 when done because active VMs keep billing. Uploads are limited to 8 MiB;
 downloads read to EOF and refuse to overwrite local files.
+
+`sandbox resume` starts an existing sandbox and resumes compute billing. It
+keeps its ID, disk and files. Add `--no-wait` to return the start receipt, or
+`--idempotency-key KEY` to retain a retry key. Inspect status after an uncertain
+response; the CLI never automatically retries or creates a replacement VM.
 
 ### Expose VM services
 
