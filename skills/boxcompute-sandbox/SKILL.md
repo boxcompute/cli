@@ -134,3 +134,12 @@ state. Never retry activation automatically.
 
 Summarize which workspace was used, the meaningful command results, and whether
 the sandbox was left running.
+
+## Credit, usage and audit reads
+
+Use `bxc credits` to check remaining credit, settled spending and reservations.
+Use `bxc billing transactions` for wallet history, `bxc usage --days 30` for
+activity counts, `bxc costs` for per-sandbox compute costs, and `bxc audit` for
+API request history. Add `--json` for exact integer micro-USD amounts and cursors.
+These reads require `usage:read` and never start or resume a VM. An unavailable
+compute estimate means spendable credit is unknown; do not treat it as zero.

@@ -9,6 +9,8 @@ import {
   BoxCompute,
   BoxComputeError,
   BoxComputeTransportError,
+  type BillingSummary,
+  type BillingTransactionPage,
   type AuditEventPage,
   type DeletedSandbox,
   type ExecutionResult,
@@ -19,6 +21,7 @@ import {
   type SandboxCostDetail,
   type SandboxCostReport,
   type SandboxLogs,
+  type Usage,
   type Workspace,
 } from "@boxcompute/sdk";
 import { buildCreateSandboxRequest, createClient, type SandboxSize } from "./sdk.js";
@@ -62,6 +65,9 @@ Commands:
     logout                        Revoke and remove the saved CLI credential
   doctor                          Verify the saved connection
   whoami                          Show the account and API key behind the saved credential
+  credits                         Show remaining credit, settled spending and pending costs
+  billing                         Show credits or page wallet transactions
+  usage                           Show activity counts for the last 1–90 days
   workspaces                      List workspaces that can own sandboxes
   sandboxes                       [aliases: list, ls] List sandbox instances
   sandbox                         Manage isolated BoxCompute sandboxes
@@ -280,6 +286,36 @@ Options:
   --to TIMESTAMP                  Window end (RFC 3339)
   --before CURSOR                 Continue from a previous page's cursor
   --limit EVENTS                  Page size (default: 50, max: 200)
+`;
+
+const billingHelp = `Read credits and wallet transactions
+
+Usage: bxc billing [transactions] [options]
+       bxc credits
+
+  billing                         Remaining credit and settled spending
+  billing transactions            Page verified wallet entries, newest first
+
+Transaction options:
+  --from TIMESTAMP                Inclusive RFC 3339 start
+  --to TIMESTAMP                  Exclusive RFC 3339 end
+  --kind KIND                     Filter by transaction kind
+  --bucket cash|promo|plan         Filter by credit bucket
+  --before CURSOR                 Cursor from the previous page
+  --limit ENTRIES                 Page size (default: 50, max: 200)
+
+Amounts are USD. JSON retains exact integer micro-USD (1000000 = $1).
+Available credit is unknown when running compute estimates are unavailable.
+Settled spending excludes reservations, running estimates and observed AI costs.
+`;
+
+const usageHelp = `Read account activity counts
+
+Usage: bxc usage [--days DAYS]
+
+  --days DAYS                     Window from 1–90 days (default: 30)
+
+Use bxc credits for remaining credit and bxc costs for compute spending.
 `;
 
 const skillHelp = `Manage coding-harness skills
@@ -707,6 +743,41 @@ const isoTime = (milliseconds: number | null | undefined) =>
   milliseconds === null || milliseconds === undefined ? "-" : new Date(milliseconds).toISOString();
 const usd = (micros: number) => `$${(micros / 1_000_000).toFixed(4)}`;
 
+function billingOutput(io: Io, json: boolean, billing: BillingSummary): number {
+  const available = billing.balance.availableMicros === null ? "Unavailable" : usd(billing.balance.availableMicros);
+  const running = billing.activeEstimate.amountMicros === null ? "Unavailable" : usd(billing.activeEstimate.amountMicros);
+  emit(io, json, { billing },
+    `Available credit\t${available}\nWallet balance\t${usd(billing.balance.totalMicros)}\n` +
+    `Reserved\t${usd(billing.balance.reservedMicros)}\nRunning compute estimate\t${running}\n` +
+    `Settled spending\t${usd(billing.settledUsage.totalMicros)}\n` +
+    `  AI\t${usd(billing.settledUsage.aiMicros)}\n  Compute\t${usd(billing.settledUsage.sandboxMicros)}\n` +
+    `Account\t${billing.accountStatus}\nAI billing\t${billing.modelBillingMode}\n`);
+  if (!json && billing.activeEstimate.status === "unavailable")
+    write(io.stderr, "Running compute estimates are unavailable; spendable credit is unknown.\n");
+  return 0;
+}
+
+function transactionsOutput(io: Io, json: boolean, page: BillingTransactionPage): number {
+  if (json) { emit(io, true, page, ""); return 0; }
+  if (!page.transactions.length) write(io.stdout, "No wallet transactions found.\n");
+  for (const entry of page.transactions) {
+    const amount = `${entry.amountMicros < 0 ? "-" : "+"}${usd(Math.abs(entry.amountMicros))}`;
+    const description = entry.description.replace(/[\x00-\x1f\x7f]/g, " ");
+    write(io.stdout, `${isoTime(entry.createdAt)}\t${entry.id}\t${entry.kind}\t${entry.bucket}\t${amount}\t${description}\n`);
+  }
+  if (page.nextCursor) write(io.stderr, `More transactions: bxc billing transactions --before ${page.nextCursor}\n`);
+  return 0;
+}
+
+function usageOutput(io: Io, json: boolean, usage: Usage): number {
+  emit(io, json, { usage }, `Since\t${isoTime(usage.since)}\nOperations\t${usage.operations}\n` +
+    `Executions\t${usage.executions}\nExecution time (ms)\t${usage.executionTimeMs}\n` +
+    `Output bytes\t${usage.outputBytes}\nFailed operations\t${usage.failedOperations}\n` +
+    `Agent runs\t${usage.agentRuns}\nTool calls\t${usage.toolCalls}\n` +
+    `Active sandboxes\t${usage.activeSandboxes}\nSandbox slots\t${usage.sandboxSlots}\n`);
+  return 0;
+}
+
 function meOutput(io: Io, json: boolean, me: Me): number {
   const identity = me.account.email ?? me.account.name ?? me.account.id;
   emit(
@@ -1040,6 +1111,27 @@ export async function runCli(argv: string[], supplied: CliDependencies = {}): Pr
     if (args.length) throw new UsageError("whoami takes no options");
     return meOutput(io, json, await client.me.get());
   }
+  if (command === "credits" || command === "billing") {
+    if (command === "credits" || !args.length) {
+      if (args.length) throw new UsageError("credits takes no options");
+      return billingOutput(io, json, await client.billing.get());
+    }
+    if (args.shift() !== "transactions") throw new UsageError("billing requires transactions or no arguments");
+    const window = timeWindow(args);
+    const kind = option(args, "kind");
+    const bucket = oneOf(option(args, "bucket"), "--bucket", ["cash", "promo", "plan"] as const);
+    const before = option(args, "before");
+    const limit = positive(option(args, "limit"), "--limit");
+    if (limit !== undefined && limit > 200) throw new UsageError("--limit must be 200 or fewer");
+    if (args.length) throw new UsageError(`Unknown billing transactions option: ${args[0]}`);
+    return transactionsOutput(io, json, await client.billing.transactions({ ...window, kind, bucket, before, limit }));
+  }
+  if (command === "usage") {
+    const days = positive(option(args, "days"), "--days") ?? 30;
+    if (days > 90) throw new UsageError("--days must be 90 or fewer");
+    if (args.length) throw new UsageError(`Unknown usage option: ${args[0]}`);
+    return usageOutput(io, json, await client.usage.get(days));
+  }
   if (command === "costs") {
     const window = timeWindow(args);
     const apiKeyId = option(args, "api-key");
@@ -1281,6 +1373,8 @@ function removalStatus(status: "removed" | "missing"): string {
 }
 
 function helpFor(command?: string): string {
+  if (command === "credits" || command === "billing") return billingHelp;
+  if (command === "usage") return usageHelp;
   if (command === "sandbox") return sandboxHelp;
   if (command === "skill" || command === "skills") return skillHelp;
   if (command === "deleted") return deletedHelp;

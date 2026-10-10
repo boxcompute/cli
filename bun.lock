@@ -5,7 +5,7 @@
     "": {
       "name": "@boxcompute/cli",
       "dependencies": {
-        "@boxcompute/sdk": "^0.3.0",
+        "@boxcompute/sdk": "^0.4.0",
       },
       "devDependencies": {
         "@types/bun": "latest",
@@ -16,7 +16,7 @@
     },
   },
   "packages": {
-    "@boxcompute/sdk": ["@boxcompute/sdk@0.3.0", "", {}, "sha512-Ai6gl7j5lcWSHwJahYOg4S1eUfGWBiJQXSl5TltsaKCd12MiYsmlvLzwarUDu2B2jDlgkAZi+T8yjQMbeUVRLw=="],
+    "@boxcompute/sdk": ["@boxcompute/sdk@0.4.0", "", {}, "sha512-EJ1Iiom+kuf72jJh32Ex8D1ph0UO0NJad/2lBCUdQmVAghA+pMkgyJMvlih4XLeqnElLRjwxa5JRH1s4nAsaaQ=="],
 
     "@oxlint/binding-android-arm-eabi": ["@oxlint/binding-android-arm-eabi@1.83.0", "", { "os": "android", "cpu": "arm" }, "sha512-0yGY24EwsLk5YDe6F+VkmZyRHSwJDALa3nIrPpq7FXmp2lV2d0TzvBCGeZk+wgiULRGr5blhyr4QMp5KCXJUqA=="],
 

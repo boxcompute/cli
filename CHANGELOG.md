@@ -3,6 +3,26 @@
 This file records user-visible changes to the BoxCompute CLI. GitHub Releases
 use the same notes and bind them to the exact source commit.
 
+## [0.10.0] - 2026-10-10
+
+Read remaining credits and wallet history without opening the web app.
+
+### CLI users
+
+- `bxc credits` (or `bxc billing`) shows remaining credit, settled AI/compute
+  spending, reservations and running estimates. Unknown estimates stay unknown.
+- `bxc billing transactions` pages verified wallet entries with time, kind,
+  bucket and cursor filters. Signed amounts distinguish additions from deductions.
+- `bxc usage --days 30` reports account activity counts. All commands support
+  `--json`, retaining exact integer micro-USD amounts.
+- Requires the public billing API and `@boxcompute/sdk` 0.4.0. Update with
+  `bxc update` or `npm install --global @boxcompute/cli@latest` after rollout.
+
+### Security
+
+- New commands are read-only, require `usage:read`, never wake compute, and
+  preserve the existing credential storage and redirect protections.
+
 ## [0.9.0] - 2026-10-09
 
 Resume a stopped sandbox with `bxc sandbox resume SANDBOX_ID`. The existing
