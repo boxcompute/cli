@@ -762,7 +762,7 @@ function transactionsOutput(io: Io, json: boolean, page: BillingTransactionPage)
   if (!page.transactions.length) write(io.stdout, "No wallet transactions found.\n");
   for (const entry of page.transactions) {
     const amount = `${entry.amountMicros < 0 ? "-" : "+"}${usd(Math.abs(entry.amountMicros))}`;
-    const description = entry.description.replace(/[\x00-\x1f\x7f]/g, " ");
+    const description = entry.description.replace(/\p{Cc}/gu, " ");
     write(io.stdout, `${isoTime(entry.createdAt)}\t${entry.id}\t${entry.kind}\t${entry.bucket}\t${amount}\t${description}\n`);
   }
   if (page.nextCursor) write(io.stderr, `More transactions: bxc billing transactions --before ${page.nextCursor}\n`);
