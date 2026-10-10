@@ -129,6 +129,13 @@ expires or is closed. Each VM has at most one preview at a time.
 ### Account, costs, and history
 
 ```sh
+# Remaining credits, settled spending, reservations and running estimates.
+bxc credits
+bxc --json billing
+# Filter and page wallet transactions.
+bxc billing transactions --kind usage_charge --limit 20
+# Activity counts for the last 30 days.
+bxc usage --days 30
 # Confirm which account and API key the saved credential belongs to.
 bxc whoami
 # Settled and in-progress compute cost per sandbox (default: last 30 days).

@@ -182,8 +182,9 @@ jobs:
           PACKAGE_NAME: ${{ steps.release.outputs.name }}
           PACKAGE_VERSION: ${{ steps.release.outputs.version }}
         run: |
-          for _ in $(seq 1 12); do
-            published="$(npm view "$PACKAGE_NAME" version 2>/dev/null || true)"
+          # npm may accept a signed package before registry processing finishes.
+          for _ in $(seq 1 120); do
+            published="$(npm view "$PACKAGE_NAME@$PACKAGE_VERSION" version 2>/dev/null || true)"
             if [ "$published" = "$PACKAGE_VERSION" ]; then
               echo "Published $PACKAGE_NAME@$PACKAGE_VERSION"
               exit 0

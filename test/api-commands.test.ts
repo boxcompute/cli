@@ -42,6 +42,60 @@ const costDetail = {
 };
 
 describe("API commands", () => {
+  it("reads remaining credit and keeps settled spending separate from pending costs", async () => {
+    const billing = {
+      accountStatus: "active", modelBillingMode: "observe",
+      balance: { totalMicros: 900_000, availableMicros: 800_000, reservedMicros: 25_000 },
+      settledUsage: { aiMicros: 10_000, sandboxMicros: 90_000, totalMicros: 100_000 },
+      activeEstimate: { status: "available", amountMicros: 75_000 },
+    };
+    const human = await run(["credits"], { billing });
+    expect(human.requests[0]?.url.pathname).toBe("/api/v2/billing");
+    expect(human.requests[0]?.method).toBe("GET");
+    expect(human.stdout).toContain("Available credit\t$0.8000");
+    expect(human.stdout).toContain("Settled spending\t$0.1000");
+    const machine = await run(["--json", "billing"], { billing });
+    expect(JSON.parse(machine.stdout)).toEqual({ billing });
+    const unknown = await run(["credits"], { billing: { ...billing,
+      balance: { ...billing.balance, availableMicros: null },
+      activeEstimate: { status: "unavailable", amountMicros: null },
+    } });
+    expect(unknown.stdout).toContain("Available credit\tUnavailable");
+    expect(unknown.stderr).toContain("spendable credit is unknown");
+  });
+
+  it("pages signed wallet transactions with filters and preserves exact JSON amounts", async () => {
+    const page = { currency: "usd", nextCursor: "next_2", transactions: [{
+      id: "entry_1", kind: "usage_charge", bucket: "promo", amountMicros: -2_034,
+      description: "Compute\ncharge", createdAt: 1_000, expiresAt: null,
+    }] };
+    const result = await run(["billing", "transactions", "--bucket", "promo", "--kind", "usage_charge",
+      "--before", "next_1", "--limit", "20", "--from", "2026-10-01T00:00:00Z"], page);
+    expect(result.requests[0]?.url.pathname).toBe("/api/v2/billing/transactions");
+    expect(Object.fromEntries(result.requests[0]!.url.searchParams)).toEqual({
+      bucket: "promo", kind: "usage_charge", before: "next_1", limit: "20", from: "2026-10-01T00:00:00.000Z",
+    });
+    expect(result.stdout).toContain("-$0.0020\tCompute charge");
+    expect(result.stderr).toContain("bxc billing transactions --before next_2");
+    const json = await run(["--json", "billing", "transactions"], page);
+    expect(JSON.parse(json.stdout)).toEqual(page);
+    expect(json.stderr).toBe("");
+  });
+
+  it("reports activity counts and validates usage windows before a request", async () => {
+    const usage = { since: 1_000, operations: 10, executions: 5, executionTimeMs: 1_234,
+      outputBytes: 50, failedOperations: 1, agentRuns: 2, toolCalls: 7,
+      activeSandboxes: 1, sandboxSlots: 2, recent: [] };
+    const result = await run(["usage", "--days", "7"], { usage });
+    expect(result.requests[0]?.url.pathname).toBe("/api/v2/usage");
+    expect(result.requests[0]?.url.searchParams.get("days")).toBe("7");
+    expect(result.stdout).toContain("Operations\t10");
+    expect(JSON.parse((await run(["--json", "usage"], { usage })).stdout)).toEqual({ usage });
+    for (const days of ["0", "91", "1.5"])
+      await expect(run(["usage", "--days", days], {})).rejects.toThrow("--days");
+    await expect(run(["billing", "transactions", "--limit", "201"], {})).rejects.toThrow("200");
+    await expect(run(["billing", "transactions", "--bucket", "other"], {})).rejects.toThrow("--bucket");
+  });
   it("shows the identity behind the saved credential", async () => {
     const result = await run(["whoami"], {
       account: { id: "acct_1", email: "dev@example.com", name: null },
