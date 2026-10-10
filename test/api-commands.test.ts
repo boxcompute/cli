@@ -73,7 +73,7 @@ describe("API commands", () => {
       "--before", "next_1", "--limit", "20", "--from", "2026-10-01T00:00:00Z"], page);
     expect(result.requests[0]?.url.pathname).toBe("/api/v2/billing/transactions");
     expect(Object.fromEntries(result.requests[0]!.url.searchParams)).toEqual({
-      bucket: "promo", kind: "usage_charge", before: "next_1", limit: "20", from: "2026-10-01T00:00:00Z",
+      bucket: "promo", kind: "usage_charge", before: "next_1", limit: "20", from: "2026-10-01T00:00:00.000Z",
     });
     expect(result.stdout).toContain("-$0.0020\tCompute charge");
     expect(result.stderr).toContain("bxc billing transactions --before next_2");
