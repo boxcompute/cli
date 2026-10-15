@@ -48,6 +48,12 @@ import { runProxy } from "./proxy.js";
 import { runSsh } from "./ssh.js";
 import { cooperativeConnectionApi } from "./cooperative-connection.js";
 import { resumeSandbox } from "./resume.js";
+import {
+  dismissMaintenanceNotice,
+  fetchMaintenanceNotice,
+  formatMaintenanceNotice,
+  maintenanceMotd,
+} from "./maintenance.js";
 
 const DEFAULT_URL = "https://app.boxcompute.ai";
 const CLI_VERSION = (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version;
@@ -68,6 +74,7 @@ Commands:
   credits                         Show remaining credit, settled spending and pending costs
   billing                         Show credits or page wallet transactions
   usage                           Show activity counts for the last 1–90 days
+  maintenance                     Show or dismiss the current maintenance notice
   workspaces                      List workspaces that can own sandboxes
   sandboxes                       [aliases: list, ls] List sandbox instances
   sandbox                         Manage isolated BoxCompute sandboxes
@@ -357,6 +364,7 @@ type DeviceAuthorization = {
 export type CliDependencies = {
   env?: NodeJS.ProcessEnv;
   io?: Io;
+  interactive?: boolean;
   fetch?: typeof fetch;
   now?: () => number;
   sleep?: (milliseconds: number) => Promise<void>;
@@ -969,6 +977,27 @@ export async function runCli(argv: string[], supplied: CliDependencies = {}): Pr
     return proxy(args[0]!, streamIo);
   }
 
+  if (command === "maintenance") {
+    const action = args.shift() ?? "show";
+    if (args.length || (action !== "show" && action !== "dismiss")) {
+      throw new UsageError("maintenance accepts `show` or `dismiss`");
+    }
+    const url = await savedUrl(env) ?? DEFAULT_URL;
+    const notice = await fetchMaintenanceNotice(url, fetchImpl, AbortSignal.timeout(5_000));
+    if (action === "dismiss" && notice) await dismissMaintenanceNotice(notice, env);
+    emit(
+      io,
+      json,
+      { maintenance: notice, dismissed: action === "dismiss" && notice !== null },
+      notice
+        ? action === "dismiss"
+          ? `Dismissed maintenance notice ${notice.id} revision ${notice.revision}. A changed update will be shown again.\n`
+          : formatMaintenanceNotice(notice)
+        : "No active maintenance notice.\n",
+    );
+    return 0;
+  }
+
   const canAutoSync = supplied.syncManagedSkills !== undefined || supplied.env === undefined ||
     Boolean(env.HOME || env.USERPROFILE);
   if (command !== "skill" && canAutoSync) {
@@ -1095,6 +1124,11 @@ export async function runCli(argv: string[], supplied: CliDependencies = {}): Pr
   if (command === "deleted" && !args.length) args.push("list");
 
   const connection = await load(env);
+  const interactive = supplied.interactive ?? Boolean((io.stderr as NodeJS.WriteStream).isTTY);
+  if (interactive && !json) {
+    const motd = await maintenanceMotd({ baseUrl: connection.url, fetch: fetchImpl, env, now: now() });
+    if (motd) write(io.stderr, motd);
+  }
   const client = createClient(connection, fetchImpl);
   if (command === "doctor") {
     const sandboxes = await client.sandboxes.list();
