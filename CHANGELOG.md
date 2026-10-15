@@ -3,6 +3,26 @@
 This file records user-visible changes to the BoxCompute CLI. GitHub Releases
 use the same notes and bind them to the exact source commit.
 
+## [0.11.0] - 2026-10-15
+
+Show early maintenance warnings without making every command noisy.
+
+### CLI users
+
+- Interactive commands show the active maintenance window, status and expected
+  Sandbox impact at most once per local day. JSON and piped commands stay clean.
+- `bxc maintenance` shows the current notice on demand. Run
+  `bxc maintenance dismiss` to hide that revision; a changed status or window
+  is a new revision and appears again.
+- Update with `bxc update` or
+  `npm install --global @boxcompute/cli@latest` after rollout.
+
+### Security
+
+- Notices are bounded public text from the unauthenticated same-origin metadata
+  endpoint. The CLI sends no credential, follows no redirect, and stores only
+  notice IDs and local display dates in its owner-only configuration directory.
+
 ## [0.10.0] - 2026-10-10
 
 Read remaining credits and wallet history without opening the web app.
