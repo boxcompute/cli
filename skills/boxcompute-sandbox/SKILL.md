@@ -39,14 +39,23 @@ returns the receipt. An optional `--idempotency-key KEY` is reusable for the
 same resume request. Inspect status after an uncertain response; never create
 a replacement as a resume fallback. Do not wake compute for read-only status.
 
+With CLI 0.11.0+, run `bxc --json sandbox stop SANDBOX_ID` when you are done
+with a VM you will use again: it stops compute billing now and keeps the disk
+and files, and `stopped: false` means it was not running. It never wakes a
+stopped VM and is safe to repeat; on HTTP 409 (still starting, stopping or in
+use) wait a moment and run it again. Without it, a VM stops by itself 30
+minutes after its last resume, exec, upload, download or preview; status,
+logs, analytics, costs and processes running inside the VM do not count.
+
 VMs are sized at create with `--size small|large` (default `small`): small is
 0.5 CPU / 1024 MiB RAM and large is 1.5 CPU / 3072 MiB RAM, both with a 30 GiB
 workspace. Sizing is VM only: gVisor ignores `small` and rejects `large`, and
 VM sizing is mutually exclusive with `--cpu`. Use `--size large` only when the
 task needs more than the default profile; it bills more. VMs have outbound
-Internet access by default, no SSH, and no automatic lifetime expiry — delete
-the VM when finished because active VMs keep billing. Execution does not
-replace an expired VM. Probe executables; dependencies are not guaranteed.
+Internet access by default, no SSH, and no automatic lifetime expiry. A running
+VM bills until it is stopped: stop it when finished if you will reuse it, or
+delete it when its files are no longer needed. Execution does not replace an
+expired VM. Probe executables; dependencies are not guaranteed.
 
 ```sh
 bxc sandbox upload SANDBOX_ID fixture.txt /workspace/fixture.txt

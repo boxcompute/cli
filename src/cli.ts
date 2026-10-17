@@ -48,6 +48,7 @@ import { runProxy } from "./proxy.js";
 import { runSsh } from "./ssh.js";
 import { cooperativeConnectionApi } from "./cooperative-connection.js";
 import { resumeSandbox } from "./resume.js";
+import { stopSandbox } from "./stop.js";
 
 const DEFAULT_URL = "https://app.boxcompute.ai";
 const CLI_VERSION = (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version;
@@ -73,6 +74,7 @@ Commands:
   sandbox                         Manage isolated BoxCompute sandboxes
     start                         Create and start a workspace sandbox
     resume                        Start an existing sandbox with its retained files
+    stop                          Stop a running VM now; keep its files
     status                        Inspect one sandbox
     logs                          Read current or retained sandbox logs
     exec                          Execute a program inside a sandbox
@@ -117,6 +119,7 @@ Examples:
   $ bxc sandbox start WORKSPACE_ID --size large --idempotency-key SAVED_UNIQUE_KEY
   $ bxc sandbox logs SANDBOX_ID --source execute
   $ bxc sandbox exec SANDBOX_ID -- python -m pytest
+  $ bxc sandbox stop SANDBOX_ID
   $ bxc sandbox expose SANDBOX_ID --port 3000
   $ bxc sandbox preview SANDBOX_ID --port 3000
   $ bxc costs --from 2026-10-01T00:00:00Z
@@ -136,6 +139,7 @@ Commands:
 
   start WORKSPACE_ID              Create and start a new sandbox instance
   resume SANDBOX_ID               Start an existing sandbox; retain its disk and files
+  stop SANDBOX_ID                 Stop a running VM now; retain its disk and files
   status SANDBOX_ID               Inspect one sandbox
   logs SANDBOX_ID [options]       Read logs without starting the runtime
   exec SANDBOX_ID [options] -- PROGRAM [ARG...]
@@ -181,6 +185,14 @@ Resume options:
 
   Resume keeps the existing sandbox ID, disk and files. Running compute resumes
   billing. It waits up to 180 seconds; inspect status after an uncertain response.
+
+Stop:
+
+  Stop ends a running VM's compute billing now and keeps its disk and files;
+  resume, exec or a file transfer starts it again. It never wakes a stopped VM
+  and is safe to repeat. Without it, a VM stops 30 minutes after its last
+  resume, exec, file transfer or preview; status, logs, analytics, costs and
+  work running inside the VM do not count as activity.
 
 Expose options:
 
@@ -1189,6 +1201,14 @@ export async function runCli(argv: string[], supplied: CliDependencies = {}): Pr
   if (action === "rm") action = "delete";
   const id = args.shift();
   if (!action || !id) throw new UsageError("sandbox requires an action and sandbox ID");
+  if (action === "stop") {
+    if (args.length) throw new UsageError(`Unknown sandbox stop option: ${args[0]}`);
+    const { sandbox, stopped } = await stopSandbox(connection, fetchImpl, id);
+    emit(io, json, { sandbox, stopped }, stopped
+      ? `Stopped sandbox ${id}; its files are kept. Start it again with 'bxc sandbox resume ${id}'.\n`
+      : `Sandbox ${id} was not running (${sandbox.state}); nothing to stop.\n`);
+    return 0;
+  }
   if (action === "resume") {
     const key = option(args, "idempotency-key");
     const noWait = flag(args, "no-wait");

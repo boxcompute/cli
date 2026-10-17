@@ -481,6 +481,7 @@ describe("bxc CLI", () => {
     const sandboxHelp = output(sandboxIo.stdout);
     expect(sandboxHelp).toContain("--cpu CPU");
     expect(sandboxHelp).toContain("--size small|large");
+    expect(sandboxHelp).toContain("stop SANDBOX_ID");
 
     const versionIo = streams();
     expect(await runCli(["--version"], { io: versionIo, env: {} })).toBe(0);
