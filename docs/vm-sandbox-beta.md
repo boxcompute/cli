@@ -6,7 +6,7 @@ bounded integration tests for command-line tools and agent tool execution.
 
 **Access:** any authenticated BoxCompute account can create VM sandboxes; no
 separate approval is required. This profile is not intended for production
-workloads or always-on services, and active VMs bill until you delete them.
+workloads or always-on services, and running VMs bill until they stop.
 
 **CLI support:** CLI 0.4.0 or newer creates VMs by default — `bxc sandbox start`
 omits the runtime selector and waits up to 180 seconds for `running` — plus
@@ -32,13 +32,13 @@ sizing (`size`) added September 17, 2026.
 | Availability | Any authenticated account. No separate VM approval. |
 | Selection | Omitted `vmSandbox` selects the VM runtime (the default); `vmSandbox: false` explicitly selects a gVisor container sandbox. Rejected VM requests do not fall back to that path. |
 | Resources | Sizing is chosen at create with `size`. `small` (default) is 500m CPU (0.5 CPU), 1,024 MiB RAM; `large` is 1,536m CPU (1.5 CPU), 3,072 MiB RAM. Both get a 30 GiB thin-provisioned workspace. |
-| Lifetime | No automatic expiry. The VM exists, and bills for active use, until you delete it. |
+| Lifetime | No automatic expiry. The VM exists until you delete it and bills while it runs. A running VM stops, keeping its files, when you call stop or 30 minutes after its last start, execute, file call or preview request; reads, logs, operation polling and work inside the VM do not count. |
 | Image | Immutable, server-selected approved minimal Ubuntu image. No arbitrary image override, library profile, or attached volumes. |
 | User/runtime | Unprivileged user; `HOME=/workspace`. No sudo/root installation or SSH login. Check that your required executables are available; Node.js, uv and your tool's dependencies are not guaranteed. |
 | Networking | Outbound Internet access by default; request `blockNetwork: true` at create for a VM with no NIC. No inbound exposure either way. |
 | Serving | No supported public inbound port, SSH endpoint, application tunnel, or webhook URL. Binding a guest port does not publish it. |
 | Storage | `/workspace` is storage for this VM. Download needed data before deleting it. An account workspace groups sandboxes; it does not preserve their files. |
-| Lifecycle | Create, status, execute, files, delete. Do not depend on sleep/resume, snapshots, checkpoints, forks, or restore for this VM profile. |
+| Lifecycle | Create, status, execute, files, stop, resume, delete. Do not depend on snapshots, checkpoints, forks, or restore for this VM profile. |
 
 Start with a small payload and one command at a time. A full toolchain, browser,
 model or concurrent agent workload may exceed the available resources.
@@ -358,8 +358,11 @@ not make a live database backup consistent.
 
 ### 5. Export early; delete explicitly
 
-Download your results before deleting the VM. VMs have no automatic expiry,
-so an idle VM keeps billing until you delete it. When an
+Download your results before deleting the VM. VMs have no automatic expiry.
+A running VM bills until it stops: `bxc sandbox stop SANDBOX_ID` (or
+`POST /api/v2/sandboxes/{id}/stop` with `{}`) stops it now and keeps its files,
+and otherwise it stops 30 idle minutes after its last start, execute, file call
+or preview request. When an
 execute or file request detects that the VM has expired, it returns
 `503 SANDBOX_UNAVAILABLE` and the sandbox is marked `expired`.
 Using that sandbox ID again does not automatically create a replacement VM.

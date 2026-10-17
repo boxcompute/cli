@@ -74,6 +74,8 @@ bxc --json sandbox start WORKSPACE_ID --vm --idempotency-key SAVED_UNIQUE_KEY --
 bxc --json sandbox status SANDBOX_ID
 # Resume the same stopped sandbox, retaining its disk and files.
 bxc --json sandbox resume SANDBOX_ID
+# Stop a running VM now; its disk and files stay for the next resume.
+bxc --json sandbox stop SANDBOX_ID
 # Container sandbox instead (supports --cpu); explicit gVisor opt-out.
 bxc sandbox start WORKSPACE_ID --gvisor --cpu 2
 bxc sandbox upload SANDBOX_ID fixture.txt /workspace/fixture.txt
@@ -88,14 +90,22 @@ walkthroughs, retry recovery, and Hermes limitations. VMs default to the
 profile (1.5 CPU, 3072 MiB memory). Both use a 30 GiB thin-provisioned
 workspace. Sizing is VM only: the
 gVisor runtime ignores `small` and rejects `large`. VMs have outbound Internet
-access by default, no automatic lifetime expiry, and no SSH access; delete them
-when done because active VMs keep billing. Uploads are limited to 8 MiB;
-downloads read to EOF and refuse to overwrite local files.
+access by default, no automatic lifetime expiry, and no SSH access. A running
+VM bills until it stops: stop it when done if you will reuse it, or delete it
+when its files are no longer needed. Uploads are limited to 8 MiB; downloads
+read to EOF and refuse to overwrite local files.
 
 `sandbox resume` starts an existing sandbox and resumes compute billing. It
 keeps its ID, disk and files. Add `--no-wait` to return the start receipt, or
 `--idempotency-key KEY` to retain a retry key. Inspect status after an uncertain
 response; the CLI never automatically retries or creates a replacement VM.
+
+`sandbox stop` (server 0.62.0+) stops a running VM now and keeps its disk and
+files; `stopped: false` means it was not running. It never wakes a stopped VM
+and is safe to repeat; on HTTP 409 the VM is still starting, stopping or in
+use, so try again in a moment. Without it, a VM stops by itself 30 minutes
+after its last resume, exec, upload, download or preview. Status, logs,
+analytics, costs and processes running inside the VM do not count as activity.
 
 ### Expose VM services
 

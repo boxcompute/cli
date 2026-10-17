@@ -3,6 +3,31 @@
 This file records user-visible changes to the BoxCompute CLI. GitHub Releases
 use the same notes and bind them to the exact source commit.
 
+## [0.11.0] - 2026-10-18
+
+Stop a running VM with `bxc sandbox stop SANDBOX_ID`.
+
+### CLI users
+
+- `bxc sandbox stop SANDBOX_ID` stops a running VM's compute billing now and
+  keeps its disk and files; `bxc sandbox resume` starts it again. It reports
+  whether the VM was running (`stopped` in `--json`), never wakes a stopped VM
+  and is safe to repeat. HTTP 409 means it is still starting, stopping or in
+  use: run it again in a moment.
+- Help, the README, the VM guide and the bundled skill now say that a VM also
+  stops by itself 30 minutes after its last resume, exec, file transfer or
+  preview, and that status, logs, analytics, costs and work inside the VM do
+  not count. They previously said an idle VM billed until deleted.
+- Requires BoxCompute server 0.62.0 (`POST /api/v2/sandboxes/{id}/stop`). An
+  older server reports that stopping is not supported. Update with
+  `bxc update` or `npm install --global @boxcompute/cli@latest` after rollout.
+
+### Security
+
+- Uses the saved credential with the same HTTPS/loopback origin check, refused
+  redirects and bounded response reading as `sandbox resume`. The endpoint
+  needs the API key's `sandbox:create` scope, like resume.
+
 ## [0.10.0] - 2026-10-10
 
 Read remaining credits and wallet history without opening the web app.
