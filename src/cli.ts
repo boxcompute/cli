@@ -30,6 +30,7 @@ import {
   clearConnection,
   loadConnection,
   loadSavedUrl,
+  normalizeBaseUrl,
   saveConnection,
   type Connection,
 } from "./config.js";
@@ -49,6 +50,15 @@ import { runSsh } from "./ssh.js";
 import { cooperativeConnectionApi } from "./cooperative-connection.js";
 import { resumeSandbox } from "./resume.js";
 import { stopSandbox } from "./stop.js";
+import {
+  DEFAULT_IDLE_STOP_MS,
+  DEFAULT_RUNNER_IMAGE,
+  RUNNER_IMAGE_PATTERN,
+  RUNNER_TOKEN_ENV,
+  RUNNER_TOKEN_PATTERN,
+  parseDuration,
+  runRunner,
+} from "./runner.js";
 
 const DEFAULT_URL = "https://app.boxcompute.ai";
 const CLI_VERSION = (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version;
@@ -89,6 +99,7 @@ Commands:
   deleted                         Read deleted sandboxes, their logs, and their costs
   costs                           Compute cost per API key and per sandbox
   audit                           Page the account's API audit log
+  runner                          Run BoxCompute chats in Docker on this machine
   skill                           [alias: skills] Manage coding-harness skills
     detect                        Detect compatible coding harnesses
     list                          [alias: ls] List detected or installed harnesses
@@ -125,6 +136,7 @@ Examples:
   $ bxc costs --from 2026-10-01T00:00:00Z
   $ bxc audit --outcome error
   $ BOXCOMPUTE_ENABLE_SSH=1 bxc sandbox ssh SANDBOX_ID
+  $ BOXCOMPUTE_RUNNER_TOKEN=bxr_... bxc runner
 
 Compatibility:
 
@@ -330,6 +342,41 @@ Usage: bxc usage [--days DAYS]
 Use bxc credits for remaining credit and bxc costs for compute spending.
 `;
 
+const runnerHelp = `Run BoxCompute chats on this machine
+
+Usage: bxc runner [options]
+
+  Connects to BoxCompute over an outbound WebSocket and runs the agent's
+  shell and file commands for chats that use this runner, in one Docker
+  container per chat. Each chat's files stay in a Docker volume until
+  BoxCompute deletes its sandbox.
+
+Options:
+
+  --image IMAGE                   Container image; needs bash and python3
+                                  (default: ${DEFAULT_RUNNER_IMAGE})
+  --idle-stop DURATION            Stop a chat's container after this long
+                                  without commands, such as 30m or 2h; 0 never
+                                  stops (default: 30m). Files stay; the next
+                                  command starts it again
+  --dispatch PROGRAM              Hand each operation to PROGRAM instead of
+                                  Docker (see the README for the contract)
+  --url URL                       BoxCompute web URL (default: the saved login
+                                  URL, else https://app.boxcompute.ai)
+  --verbose                       Also log each command's arguments
+
+Environment:
+
+  ${RUNNER_TOKEN_ENV}         Required. Create a runner in BoxCompute
+                                  (Settings → Runners) and export its token.
+                                  It is never accepted on the command line and
+                                  never passed to containers or PROGRAM.
+
+  Requires Node.js 22 or newer and, without --dispatch, a running Docker.
+  Ctrl-C disconnects and stops running commands; containers and files stay.
+  The agent's commands run here with this machine's network access.
+`;
+
 const skillHelp = `Manage coding-harness skills
 
 Usage: bxc skill <command> [options]
@@ -386,6 +433,9 @@ export type CliDependencies = {
   openServices?: typeof openServices;
   proxy?: typeof runProxy;
   ssh?: typeof runSsh;
+  runner?: typeof runRunner;
+  /** null simulates a runtime without a global WebSocket (Node.js 20). */
+  webSocket?: typeof WebSocket | null;
 };
 
 class UsageError extends Error {
@@ -1100,6 +1150,63 @@ export async function runCli(argv: string[], supplied: CliDependencies = {}): Pr
     return 0;
   }
 
+  if (command === "runner") {
+    if (json) throw new UsageError("runner is a foreground stream and does not support --json");
+    const image = option(args, "image");
+    const dispatch = option(args, "dispatch");
+    const idleStop = option(args, "idle-stop");
+    const urlOption = option(args, "url");
+    const verbose = flag(args, "verbose");
+    if (args.length) throw new UsageError(`Unknown runner option: ${args[0]}`);
+    if (image !== undefined && !RUNNER_IMAGE_PATTERN.test(image)) {
+      throw new UsageError("--image must be an image reference such as node:22-bookworm");
+    }
+    if (dispatch !== undefined && idleStop !== undefined) {
+      throw new UsageError("--idle-stop applies only to the built-in Docker dispatch");
+    }
+    let idleStopMs = DEFAULT_IDLE_STOP_MS;
+    if (idleStop !== undefined) {
+      try {
+        idleStopMs = parseDuration(idleStop);
+      } catch (error) {
+        throw new UsageError((error as Error).message);
+      }
+    }
+    const WebSocketImpl = supplied.webSocket === undefined ? globalThis.WebSocket : supplied.webSocket;
+    if (typeof WebSocketImpl !== "function") throw new Error("bxc runner needs Node.js 22 or newer.");
+    // The token comes only from the environment: argv is visible to every
+    // local user through ps.
+    const token = env[RUNNER_TOKEN_ENV]?.trim();
+    if (!token) {
+      throw new Error(
+        `${RUNNER_TOKEN_ENV} is not set. Create a runner in BoxCompute (Settings → Runners), ` +
+        `then run \`export ${RUNNER_TOKEN_ENV}=<token>\` and start bxc runner again.`,
+      );
+    }
+    if (!RUNNER_TOKEN_PATTERN.test(token)) {
+      throw new Error(`${RUNNER_TOKEN_ENV} is not a runner token (runner tokens start with bxr_). Copy it from Settings → Runners.`);
+    }
+    const url = normalizeBaseUrl(urlOption ?? await savedUrl(env) ?? DEFAULT_URL);
+    const abort = new AbortController();
+    const stop = () => abort.abort();
+    const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+    for (const signal of signals) process.on(signal, stop);
+    try {
+      return await (supplied.runner ?? runRunner)({
+        url,
+        token,
+        image: image ?? DEFAULT_RUNNER_IMAGE,
+        imageChosen: image !== undefined,
+        dispatch: dispatch ?? null,
+        idleStopMs,
+        verbose,
+        version: CLI_VERSION,
+      }, { env, stdout: io.stdout, stderr: io.stderr, signal: abort.signal, WebSocket: WebSocketImpl });
+    } finally {
+      for (const signal of signals) process.off(signal, stop);
+    }
+  }
+
   if (command === "sandbox" && !args.length) {
     write(io.stdout, sandboxHelp);
     return 0;
@@ -1400,6 +1507,7 @@ function helpFor(command?: string): string {
   if (command === "deleted") return deletedHelp;
   if (command === "costs") return costsHelp;
   if (command === "audit") return auditHelp;
+  if (command === "runner") return runnerHelp;
   return rootHelp;
 }
 
