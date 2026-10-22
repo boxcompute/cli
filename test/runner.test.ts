@@ -104,7 +104,9 @@ function fakeServer() {
       },
     },
   });
-  cleanups.push(() => server.stop(true));
+  // Not awaited: on Bun 1.3.14 stop(true) never settles after the server
+  // itself closed a WebSocket (the 4401 and 1012 cases).
+  cleanups.push(() => { void server.stop(true); });
   return { peers, url: `http://127.0.0.1:${server.port}` };
 }
 
