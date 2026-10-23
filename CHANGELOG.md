@@ -3,6 +3,39 @@
 This file records user-visible changes to the BoxCompute CLI. GitHub Releases
 use the same notes and bind them to the exact source commit.
 
+## [0.12.0] - 2026-10-22
+
+Run BoxCompute chats on your own machine with `bxc runner`.
+
+### CLI users
+
+- `bxc runner` connects this machine to BoxCompute over an outbound WebSocket
+  and runs the agent's shell and file commands for chats that use the runner,
+  in one Docker container per chat (`node:22-bookworm` unless `--image` says
+  otherwise). Each chat's `/workspace` is a Docker volume that stays until
+  BoxCompute deletes the chat's sandbox.
+- Containers stop after 30 minutes without commands (`--idle-stop`, `0` to
+  keep them running); the next command starts them again with their files.
+- `--dispatch PROGRAM` hands each ensure, exec and delete to your own program
+  instead of Docker. The README documents the contract and has a complete
+  Docker example.
+- The runner reconnects by itself after network failures and server restarts,
+  and exits when BoxCompute rejects its token. Ctrl-C stops running commands
+  but keeps containers and files.
+- Requires Node.js 22 or newer, Docker unless `--dispatch` is used, and a
+  BoxCompute server with self-hosted runners (Settings → Runners). Every other
+  command still runs on Node.js 20.
+
+### Security
+
+- The runner token is read only from `BOXCOMPUTE_RUNNER_TOKEN`, sent in the
+  first WebSocket message rather than a URL or header, never printed, and
+  removed from the environment of Docker, containers and dispatch programs.
+  Plain `ws://` is refused except to loopback.
+- The agent's commands run on this machine with its network access, inside
+  containers; BoxCompute approvals still apply. Delete the runner in Settings →
+  Runners to revoke its token.
+
 ## [0.11.0] - 2026-10-18
 
 Stop a running VM with `bxc sandbox stop SANDBOX_ID`.

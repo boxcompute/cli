@@ -183,6 +183,155 @@ exact `--revoke` command; the server-side lease still expires naturally.
 Run `bxc` or `bxc --help` for the complete command reference. The previous
 `bcompute` executable remains available as a compatibility alias.
 
+## Run chats on your own machine (`bxc runner`)
+
+`bxc runner` lets the BoxCompute agent work on a computer you control. It
+opens an outbound WebSocket to BoxCompute, so the machine needs no open ports,
+and runs the agent's shell and file commands for chats that use this runner in
+one Docker container per chat. Each chat's `/workspace` is a Docker volume on
+this machine that stays until BoxCompute deletes the chat's sandbox.
+
+Requirements: Docker (`docker version` must work for your user) and Node.js 22
+or newer. The other `bxc` commands still run on Node.js 20.
+
+### Set up a runner
+
+1. In BoxCompute, open Settings → Runners, create a runner and copy its token.
+2. On the machine that should run the commands:
+
+   ```sh
+   export BOXCOMPUTE_RUNNER_TOKEN=bxr_...
+   npx -y @boxcompute/cli@latest runner
+   ```
+
+   To keep the token out of your shell history, type it at a prompt instead:
+   `read -rs BOXCOMPUTE_RUNNER_TOKEN && export BOXCOMPUTE_RUNNER_TOKEN`.
+
+   The runner prints `Connected as "<runner name>"` and then one line per
+   operation. Leave it running; Ctrl-C disconnects it.
+3. In BoxCompute, choose the runner for a chat in the composer. While the
+   runner is connected, that chat's commands run in a container here.
+
+The token is read only from `BOXCOMPUTE_RUNNER_TOKEN`, never from a command-line
+option, because other users on the machine can read process arguments.
+
+```sh
+# Another image; it needs bash and python3 (default: node:22-bookworm).
+bxc runner --image python:3.13
+# Stop a chat's container after 2 hours without commands; 0 never stops it.
+bxc runner --idle-stop 2h
+# A self-hosted BoxCompute (default: your `bxc login` URL, else app.boxcompute.ai).
+bxc runner --url https://boxcompute.example.com
+# Also log each command's arguments.
+bxc runner --verbose
+```
+
+Each container is named after the chat's sandbox (`bxs-…`), labelled
+`com.boxcompute.runner` and `com.boxcompute.sandbox`, runs with `--init`, and
+mounts the volume `bxs-…-workspace` at `/workspace`. List them with
+`docker ps -a --filter label=com.boxcompute.runner`.
+
+**Idle stop.** A container this runner has used stops after 30 minutes without
+commands (`--idle-stop`). Its volume and files stay, and the next command
+starts it again.
+
+**Disconnects.** The runner reconnects by itself, backing off up to 30 seconds.
+Commands that were running when the connection dropped are stopped; BoxCompute
+reports them as failed. Ctrl-C (or SIGTERM) also stops running commands but
+keeps every container and its files. The runner exits instead of reconnecting
+when BoxCompute rejects the token, runners are not available on the account, or
+another `bxc runner` connects with the same token.
+
+### Custom dispatch
+
+`--dispatch PROGRAM` hands every operation to your own program instead of the
+built-in Docker dispatch, for example to use Podman, a VM or a remote host. The
+runner starts `PROGRAM` without a shell for each operation, with the runner's
+environment minus `BOXCOMPUTE_RUNNER_TOKEN`, plus:
+
+| Variable | Value |
+| --- | --- |
+| `BOXCOMPUTE_OPERATION` | `ensure`, `exec` or `delete` |
+| `BOXCOMPUTE_SANDBOX_ID` | The chat's sandbox, `bxs-` and 16 hex digits |
+| `BOXCOMPUTE_RUNNER_ID` | This runner's ID |
+| `BOXCOMPUTE_IMAGE` | The `--image` value (default `node:22-bookworm`) |
+
+- **ensure** creates the sandbox if it is missing, with an empty `/workspace`,
+  or starts it if it is stopped, and exits 0 once commands can run. It must be
+  safe to repeat.
+- **exec** receives the command's argv as its arguments. The runner writes the
+  command's stdin (often empty) and closes it, streams stdout and stderr, and
+  reports the program's exit code as the command's.
+- **delete** removes the sandbox and its storage. An already missing sandbox is
+  a success.
+
+When ensure or delete exits non-zero, the last non-empty line of its stderr is
+shown in BoxCompute as the error. A cancelled exec gets SIGKILL for the
+program's whole process group; work it started elsewhere, such as through
+`docker exec`, can keep running. There is no idle stop in this mode.
+
+This `dispatch.sh` does what the built-in Docker dispatch does, without idle
+stop:
+
+```sh
+#!/bin/sh
+# bxc runner --dispatch ./dispatch.sh
+set -eu
+id="$BOXCOMPUTE_SANDBOX_ID"
+fail() { echo "$1" >&2; exit 1; }
+
+case "$BOXCOMPUTE_OPERATION" in
+  ensure)
+    state=$(docker inspect --type container --format '{{.State.Running}}' "$id" 2>/dev/null || true)
+    case "$state" in
+      true) ;;
+      false) docker start "$id" >/dev/null || fail "Could not start $id" ;;
+      *)
+        docker run -d --name "$id" --init -w /workspace \
+          --label "com.boxcompute.runner=$BOXCOMPUTE_RUNNER_ID" \
+          --label "com.boxcompute.sandbox=$id" \
+          -v "$id-workspace:/workspace" \
+          "$BOXCOMPUTE_IMAGE" sleep infinity >/dev/null \
+          || fail "Could not create $id from $BOXCOMPUTE_IMAGE"
+        docker exec "$id" sh -c 'command -v bash && command -v python3' >/dev/null \
+          || fail "The image $BOXCOMPUTE_IMAGE needs bash and python3"
+        ;;
+    esac
+    ;;
+  exec)
+    exec docker exec -i "$id" "$@"
+    ;;
+  delete)
+    if docker inspect --type container "$id" >/dev/null 2>&1; then
+      docker rm -f "$id" >/dev/null || fail "Could not remove $id"
+    fi
+    docker volume rm -f "$id-workspace" >/dev/null || fail "Could not remove $id-workspace"
+    ;;
+  *)
+    fail "Unsupported operation: $BOXCOMPUTE_OPERATION"
+    ;;
+esac
+```
+
+Make it executable with `chmod +x dispatch.sh`. `--idle-stop` cannot be combined
+with `--dispatch`.
+
+### Security
+
+- The agent's commands run on this machine, inside containers that have this
+  machine's network access, including your local network. Docker separates
+  their files from yours, but treat it as running the agent here. BoxCompute
+  approvals still apply.
+- Anyone with the runner token can connect as this runner and receive its
+  chats' commands and files. Keep it secret. `bxc runner` never prints it,
+  sends it only in the first WebSocket message (not in a URL or header), and
+  does not pass it to Docker, containers or a dispatch program.
+- The connection uses TLS (`wss://`). Plain `ws://` is refused except to a
+  loopback development server.
+- Delete the runner in Settings → Runners to revoke its token. Stopping
+  `bxc runner` does not remove containers or volumes; remove them with
+  `docker rm -f` and `docker volume rm` when you no longer need their files.
+
 ## Upgrade rollout
 
 Deploy the server release with both Sandbox API v1 and v2 before publishing CLI
