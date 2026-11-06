@@ -134,7 +134,7 @@ bxc sandbox preview SANDBOX_ID --close PREVIEW_ID
 ```
 
 The URL is a bearer link: anyone who has it can reach that port until it
-expires or is closed. Each VM has at most one preview at a time.
+expires or is closed. A VM can have up to three previews at once, one per port.
 
 ### Account, costs, and history
 

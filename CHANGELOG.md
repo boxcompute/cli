@@ -3,6 +3,14 @@
 This file records user-visible changes to the BoxCompute CLI. GitHub Releases
 use the same notes and bind them to the exact source commit.
 
+## [0.12.1] - 2026-11-06
+
+### CLI users
+
+- `bxc sandbox preview` help and the README no longer say a VM has at most one
+  preview. BoxCompute 0.168.0 lets a VM have up to three at once, one per
+  port; the command itself is unchanged and already works with them.
+
 ## [0.12.0] - 2026-10-22
 
 Run BoxCompute chats on your own machine with `bxc runner`.
