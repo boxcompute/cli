@@ -220,7 +220,7 @@ Preview options:
   --close PREVIEW_ID              Close the preview instead of opening one
 
   A preview URL is a bearer link: anyone holding it can reach the port until it
-  expires after one hour or is closed. Each VM has at most one preview at a time.
+  expires after one hour or is closed. A VM can have up to three, one per port.
   The VM must be owned, running, and network-enabled.
 
 Analytics options:
