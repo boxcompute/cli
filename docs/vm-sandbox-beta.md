@@ -11,8 +11,8 @@ workloads or always-on services, and running VMs bill until they stop.
 **CLI support:** CLI 0.4.0 or newer creates VMs by default — `bxc sandbox start`
 omits the runtime selector and waits up to 180 seconds for `running` — plus
 `upload` and `download`. Use `--vm --idempotency-key KEY` for an explicit VM
-create with your own retry key, `--no-wait` for the receipt only, and
-`--gvisor` for a container sandbox instead. CLI 0.5.0 or newer adds `--size
+create with your own retry key and `--no-wait` for the receipt only. Every
+sandbox is a VM; CLI 0.13.0 removed the retired `--gvisor` and `--cpu` options. CLI 0.5.0 or newer adds `--size
 small|large` for the VM profile. The [CLI walkthrough](#cli-walkthrough-040-or-newer)
 uses browser login and the CLI's saved credential. The direct API walkthrough
 uses a separately loaded account API key; do not extract the CLI's credential.
@@ -30,7 +30,7 @@ sizing (`size`) added September 17, 2026.
 | Capability | Current VM profile |
 | --- | --- |
 | Availability | Any authenticated account. No separate VM approval. |
-| Selection | Omitted `vmSandbox` selects the VM runtime (the default); `vmSandbox: false` explicitly selects a gVisor container sandbox. Rejected VM requests do not fall back to that path. |
+| Selection | Every sandbox is a VM. Omitted `vmSandbox` or `true` creates one; `vmSandbox: false` is refused with `400 INVALID_REQUEST` since gVisor container sandboxes were retired. |
 | Resources | Sizing is chosen at create with `size`. `small` (default) is 500m CPU (0.5 CPU), 1,024 MiB RAM; `large` is 1,536m CPU (1.5 CPU), 3,072 MiB RAM. Both get a 30 GiB thin-provisioned workspace. |
 | Lifetime | No automatic expiry. The VM exists until you delete it and bills while it runs. A running VM stops, keeping its files, when you call stop or 30 minutes after its last start, execute, file call or preview request; reads, logs, operation polling and work inside the VM do not count. |
 | Image | Immutable, server-selected approved minimal Ubuntu image. No arbitrary image override, library profile, or attached volumes. |
@@ -245,10 +245,9 @@ generates a new key. Restore any saved sandbox ID from `vm-sandbox-id.txt`.
 Only `workspaceId`, optional `name` (1–80 trimmed characters), `vmSandbox`,
 `size` (VM only: `small` or `large`, default `small`), and `blockNetwork` (VM
 only; omitted means outbound Internet) configure public creation. `small` is
-0.5 CPU / 1,024 MiB and `large` is 1.5 CPU / 3,072 MiB. `size` applies to VMs
-only: gVisor ignores `small` and rejects `large`. Unknown fields are currently
-discarded, not sizing controls. Do not send `image`, `backend`, `cpu`
-(container sandboxes only), `memoryMiB`, `workspaceMiB`, `timeoutSeconds`,
+0.5 CPU / 1,024 MiB and `large` is 1.5 CPU / 3,072 MiB. Unknown fields are
+currently discarded, not sizing controls. Do not send `image`, `backend`, `cpu`,
+`memoryMiB`, `workspaceMiB`, `timeoutSeconds`,
 `libraries`, or `volumes`.
 
 An explicit `vmSandbox:true` requires `Idempotency-Key`: 1–255 visible ASCII

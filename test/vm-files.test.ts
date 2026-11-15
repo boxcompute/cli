@@ -111,27 +111,6 @@ describe("VM creation", () => {
     expect(JSON.parse(io.stdout.read().toString()).sandbox.state).toBe("pending");
     expect(io.stderr.read().toString()).toContain("bxc sandbox status sbx_slow");
   });
-
-  it("sends an explicit gVisor opt-out and rejects conflicting runtime flags", async () => {
-    const io = { stdout: new PassThrough(), stderr: new PassThrough() };
-    const bodies: unknown[] = [];
-    const dependencies = {
-      io, env: {}, loadConnection: async () => connection, syncManagedSkills: async () => [],
-      fetch: (async (_: unknown, init?: RequestInit) => {
-        if (init?.method === "POST") {
-          bodies.push(JSON.parse(String(init.body)));
-          return json({ sandbox: { id: "sbx_container", vmSandbox: false, state: "running" } }, 201);
-        }
-        throw new Error("should not inspect");
-      }) as typeof fetch,
-    };
-    expect(await runCli(["sandbox", "start", "ws_one", "--gvisor"], dependencies)).toBe(0);
-    expect(bodies).toEqual([{ workspaceId: "ws_one", vmSandbox: false }]);
-    await expect(runCli(["sandbox", "start", "ws_one", "--vm", "--gvisor", "--idempotency-key", "k"], dependencies))
-      .rejects.toThrow("either --vm or --gvisor");
-    await expect(runCli(["sandbox", "start", "ws_one", "--vm", "--cpu", "1", "--idempotency-key", "k"], dependencies))
-      .rejects.toThrow("fixed CPU profile");
-  });
 });
 
 describe("file transfers", () => {
