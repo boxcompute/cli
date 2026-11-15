@@ -29,7 +29,7 @@ and waits up to 180 seconds for `state: running`, reporting the sandbox either
 way. For an explicit VM create with your own retry key, add `--vm
 --idempotency-key KEY`; reuse the same key, workspace, and optional `--name` on
 retry, and save the returned ID even when pending. `--no-wait` returns the
-creation receipt immediately. Use `--gvisor` for a container sandbox instead.
+creation receipt immediately. Every sandbox is a VM: there is no container option.
 Never change keys to recover a stuck create.
 
 With CLI 0.9.0+, use `bxc --json sandbox resume SANDBOX_ID` when the task
@@ -49,8 +49,7 @@ logs, analytics, costs and processes running inside the VM do not count.
 
 VMs are sized at create with `--size small|large` (default `small`): small is
 0.5 CPU / 1024 MiB RAM and large is 1.5 CPU / 3072 MiB RAM, both with a 30 GiB
-workspace. Sizing is VM only: gVisor ignores `small` and rejects `large`, and
-VM sizing is mutually exclusive with `--cpu`. Use `--size large` only when the
+workspace. Use `--size large` only when the
 task needs more than the default profile; it bills more. VMs have outbound
 Internet access by default, no SSH, and no automatic lifetime expiry. A running
 VM bills until it is stopped: stop it when finished if you will reuse it, or

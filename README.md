@@ -11,7 +11,8 @@ bxc login
 ```
 
 `bxc login` opens BoxCompute in your browser. After you approve the device, the
-CLI stores its credential outside the project under `~/.config/boxcompute` with
+CLI stores its credential outside the project under `~/boxcompute` (or
+`$XDG_CONFIG_HOME/boxcompute` when that is set) with
 restrictive file permissions. The credential is never included in the agent
 skill.
 
@@ -47,17 +48,12 @@ bxc doctor
 bxc workspaces
 bxc sandboxes
 bxc sandbox start WORKSPACE_ID
-# Optionally request 0.1–4 scheduler CPUs for this sandbox.
-bxc sandbox start WORKSPACE_ID --cpu 2
 # Use the returned sandbox instance ID for later commands.
 bxc sandbox logs SANDBOX_ID --source execute
 bxc sandbox exec SANDBOX_ID -- python -m pytest
 # Forward VM port 3000 to local loopback for up to one hour.
 bxc sandbox expose SANDBOX_ID --port 3000
 ```
-
-When `--cpu` is omitted, BoxCompute uses the server's default scheduler CPU
-allocation.
 
 ### VM sandboxes
 
@@ -76,8 +72,6 @@ bxc --json sandbox status SANDBOX_ID
 bxc --json sandbox resume SANDBOX_ID
 # Stop a running VM now; its disk and files stay for the next resume.
 bxc --json sandbox stop SANDBOX_ID
-# Container sandbox instead (supports --cpu); explicit gVisor opt-out.
-bxc sandbox start WORKSPACE_ID --gvisor --cpu 2
 bxc sandbox upload SANDBOX_ID fixture.txt /workspace/fixture.txt
 bxc sandbox exec SANDBOX_ID --timeout 10 -- /bin/cat /workspace/fixture.txt
 bxc sandbox download SANDBOX_ID /workspace/fixture.txt downloaded.txt
@@ -88,8 +82,7 @@ See [Test tools in a VM sandbox](docs/vm-sandbox-beta.md) for the CLI and API
 walkthroughs, retry recovery, and Hermes limitations. VMs default to the
 `small` profile (0.5 CPU, 1024 MiB memory) and `--size large` selects the 3x
 profile (1.5 CPU, 3072 MiB memory). Both use a 30 GiB thin-provisioned
-workspace. Sizing is VM only: the
-gVisor runtime ignores `small` and rejects `large`. VMs have outbound Internet
+workspace. VMs have outbound Internet
 access by default, no automatic lifetime expiry, and no SSH access. A running
 VM bills until it stops: stop it when done if you will reuse it, or delete it
 when its files are no longer needed. Uploads are limited to 8 MiB; downloads

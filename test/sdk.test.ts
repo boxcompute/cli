@@ -14,18 +14,11 @@ describe("buildCreateSandboxRequest", () => {
     expect(buildCreateSandboxRequest("ws_one")).toEqual({ workspaceId: "ws_one" });
   });
 
-  it("forwards scheduler CPU and selects gVisor", () => {
-    expect(buildCreateSandboxRequest("ws_one", { cpu: 0.5, gvisor: true }))
-      .toEqual({ workspaceId: "ws_one", cpu: 0.5, vmSandbox: false });
-  });
-
-  it("sends VM size and omits it for gVisor", () => {
+  it("sends VM size", () => {
     expect(buildCreateSandboxRequest("ws_one", { vmSandbox: true, size: "small", idempotencyKey: "key-one" }))
       .toEqual({ workspaceId: "ws_one", vmSandbox: true, size: "small", idempotencyKey: "key-one" });
     expect(buildCreateSandboxRequest("ws_one", { vmSandbox: true, size: "large", idempotencyKey: "key-two" }))
       .toEqual({ workspaceId: "ws_one", vmSandbox: true, size: "large", idempotencyKey: "key-two" });
-    expect(buildCreateSandboxRequest("ws_one", { gvisor: true, size: "small" }))
-      .toEqual({ workspaceId: "ws_one", vmSandbox: false });
   });
 
   it("rejects invalid keys, names and conflicting runtime options before any request", () => {
@@ -33,10 +26,7 @@ describe("buildCreateSandboxRequest", () => {
       expect(() => buildCreateSandboxRequest("ws_one", { vmSandbox: true, idempotencyKey: key })).toThrow();
     }
     expect(() => buildCreateSandboxRequest("ws_one", { name: " " })).toThrow();
-    expect(() => buildCreateSandboxRequest("ws_one", { vmSandbox: true, gvisor: true, idempotencyKey: "k" })).toThrow();
-    expect(() => buildCreateSandboxRequest("ws_one", { vmSandbox: true, cpu: 1, idempotencyKey: "k" })).toThrow();
     expect(() => buildCreateSandboxRequest("ws_one", { vmSandbox: true })).toThrow();
-    expect(() => buildCreateSandboxRequest("ws_one", { gvisor: true, size: "large" })).toThrow();
   });
 });
 

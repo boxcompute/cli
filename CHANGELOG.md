@@ -3,7 +3,34 @@
 This file records user-visible changes to the BoxCompute CLI. GitHub Releases
 use the same notes and bind them to the exact source commit.
 
+## [0.13.0] - 2026-11-16
+
+The retired gVisor options are gone, and the CLI's own guide says where it
+keeps its credential.
+
+### CLI users
+
+- `bxc sandbox start` no longer offers `--gvisor` or `--cpu`. BoxCompute
+  retired gVisor container sandboxes in October and refuses `vmSandbox:
+  false`, so both options already failed at the server. They now fail before
+  any request, naming the change; choose a VM size with `--size small|large`.
+  Help, the README and the bundled `boxcompute-sandbox` skill no longer show
+  them, so coding agents stop trying them.
+- The README said the credential lives under `~/.config/boxcompute`. The CLI
+  uses `~/boxcompute`, or `$XDG_CONFIG_HOME/boxcompute` when that is set; no
+  files move.
+- Includes 0.12.1, which was never published to npm: help says a VM can have
+  up to three previews.
+- Update with `bxc update` or `npm install --global @boxcompute/cli@latest`.
+  Scripts that pass `--gvisor` or `--cpu` must drop them.
+
+### Security
+
+- No change to authentication or credential storage.
+
 ## [0.12.1] - 2026-11-06
+
+Not published to npm; its change ships in 0.13.0.
 
 ### CLI users
 

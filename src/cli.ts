@@ -126,7 +126,6 @@ Examples:
   $ bxc skill install
   $ bxc workspaces
   $ bxc sandbox start WORKSPACE_ID
-  $ bxc sandbox start WORKSPACE_ID --cpu 2
   $ bxc sandbox start WORKSPACE_ID --size large --idempotency-key SAVED_UNIQUE_KEY
   $ bxc sandbox logs SANDBOX_ID --source execute
   $ bxc sandbox exec SANDBOX_ID -- python -m pytest
@@ -175,16 +174,11 @@ Start options:
                                   small = 0.5 CPU / 1024 MiB; large = 1.5 CPU / 3072 MiB
   --vm                            Explicitly request a VM sandbox; requires
                                   --idempotency-key, reused with the same options on retry
-  --gvisor                        Explicitly request a gVisor container sandbox
-  --cpu CPU                       gVisor only: scheduler CPU allocation (0.1–4);
-                                  implies --gvisor
   --idempotency-key KEY           Required for --vm; reusable for any create
   --name NAME                     Optional sandbox name (1–80 trimmed characters)
   --no-wait                       Return the creation receipt without waiting
 
-  Without --vm or --gvisor, the server's default runtime is selected (VM).
-  --size is VM only: gVisor ignores small and rejects large. VM sizing is
-  mutually exclusive with --cpu.
+  Every sandbox is a VM; --vm only makes that explicit.
   Start waits up to 180 seconds for a pending sandbox to reach running and
   reports its state either way. No automatic retries or replacement VMs.
   Transfers never retry; downloads stop after five minutes and discard partial
@@ -623,15 +617,6 @@ export function serviceMappings(tokens: string[]): ServiceMapping[] {
   if (new Set(mappings.map(mapping => mapping.local)).size !== mappings.length) throw new UsageError("Local ports must be unique");
   if (new Set(mappings.map(mapping => mapping.remote)).size !== mappings.length) throw new UsageError("Remote ports must be unique");
   return mappings;
-}
-
-function schedulerCpu(value: string | undefined): number | undefined {
-  if (value === undefined) return undefined;
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed < 0.1 || parsed > 4) {
-    throw new UsageError("--cpu must be a number from 0.1 to 4");
-  }
-  return parsed;
 }
 
 function timestamp(value: string | undefined, name: string): string | undefined {
@@ -1330,7 +1315,9 @@ export async function runCli(argv: string[], supplied: CliDependencies = {}): Pr
     return sandbox.state === "running" || (noWait && sandbox.state === "pending") ? 0 : 1;
   }
   if (action === "start") {
-    const cpu = schedulerCpu(option(args, "cpu"));
+    // Still read, so the refusal names gVisor rather than an unknown option:
+    // BoxCompute 0.51.1 retired gVisor, and the server refuses `vmSandbox: false`.
+    const cpu = option(args, "cpu");
     const vmSandbox = flag(args, "vm");
     const gvisor = flag(args, "gvisor");
     const size: SandboxSize = oneOf(option(args, "size"), "--size", ["small", "large"] as const) ?? "small";
@@ -1338,14 +1325,12 @@ export async function runCli(argv: string[], supplied: CliDependencies = {}): Pr
     const name = option(args, "name");
     const noWait = flag(args, "no-wait");
     if (args.length) throw new UsageError(`Unknown sandbox start option: ${args[0]}`);
-    if (vmSandbox && gvisor) throw new UsageError("sandbox start accepts either --vm or --gvisor, not both");
-    if (vmSandbox && cpu !== undefined) throw new UsageError("VM sandboxes use a fixed CPU profile; --cpu selects the gVisor runtime");
+    if (gvisor || cpu !== undefined) {
+      throw new UsageError("gVisor sandboxes are retired: every sandbox is a VM. Drop --gvisor and --cpu, and choose a size with --size small|large");
+    }
     if (vmSandbox && !idempotencyKey) throw new UsageError("sandbox start --vm requires --idempotency-key; save and reuse it with the same options on retry");
-    if (gvisor && size === "large") throw new UsageError("--size large is VM only; gVisor container sandboxes ignore --size small");
     let sandbox = await client.sandboxes.create(buildCreateSandboxRequest(id, {
-      cpu,
       vmSandbox,
-      gvisor: gvisor || cpu !== undefined,
       size,
       idempotencyKey,
       name,
