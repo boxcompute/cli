@@ -176,6 +176,28 @@ exact `--revoke` command; the server-side lease still expires naturally.
 Run `bxc` or `bxc --help` for the complete command reference. The previous
 `bcompute` executable remains available as a compatibility alias.
 
+## Run Orca workspaces on BoxCompute VMs (`bxc orca`)
+
+The [BoxCompute plugin for Orca](https://github.com/boxcompute/orca-plugin)
+adds **BoxCompute VM** under Orca's **Run on**: each workspace gets its own VM,
+with Orca's server, a clone of the repository's remote, and Claude Code and
+Codex. Sign in once with `bxc login` (or `npx @boxcompute/cli login`); Orca
+then runs these steps itself:
+
+| Step | What it does |
+| --- | --- |
+| `bxc orca create [--size SIZE]` | Starts a VM (Large by default), installs Orca's server (checksum-checked), clones the remote, starts `orca-ide serve` on loopback and prints Orca's pairing through a preview link |
+| `bxc orca suspend` | Stops the VM; its files stay |
+| `bxc orca resume` | Starts it again and prints a fresh pairing |
+| `bxc orca destroy` | Deletes the VM |
+| `bxc orca keep-open` | Keeps each awake workspace's link open another hour; the plugin runs it every 20 minutes while Orca is open |
+
+A private GitHub repository is cloned with `GH_TOKEN`, `GITHUB_TOKEN` or
+`gh auth token`; the token is copied to the VM as a file and deleted after the
+clone or fetch. `BOXCOMPUTE_ORCA_SIZE` overrides the size and
+`BOXCOMPUTE_ORCA_WORKSPACE` picks the BoxCompute workspace. A running VM bills
+by the minute; after Orca quits, its VMs stop as idle and keep their files.
+
 ## Run chats on your own machine (`bxc runner`)
 
 `bxc runner` lets the BoxCompute agent work on a computer you control. It

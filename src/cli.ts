@@ -47,6 +47,7 @@ import {
 import { openServices, type ServiceMapping } from "./services.js";
 import { runProxy } from "./proxy.js";
 import { runSsh } from "./ssh.js";
+import { OrcaUsageError, runLocal, runOrca } from "./orca.js";
 import { cooperativeConnectionApi } from "./cooperative-connection.js";
 import { resumeSandbox } from "./resume.js";
 import { stopSandbox } from "./stop.js";
@@ -100,6 +101,7 @@ Commands:
   costs                           Compute cost per API key and per sandbox
   audit                           Page the account's API audit log
   runner                          Run BoxCompute chats in Docker on this machine
+  orca                            Run Orca (orca.dev) workspaces on BoxCompute VMs
   skill                           [alias: skills] Manage coding-harness skills
     detect                        Detect compatible coding harnesses
     list                          [alias: ls] List detected or installed harnesses
@@ -397,6 +399,51 @@ Supported harnesses:
   goose, pi, windsurf, and the shared agents directory
 `;
 
+const orcaHelp = `Run Orca (orca.dev) workspaces on BoxCompute VMs
+
+Usage: bxc orca <step> [--size SIZE] [--json]
+
+  These are the lifecycle steps of the BoxCompute plugin's Orca VM recipe.
+  Orca runs them in your repository; you normally never run them by hand.
+
+Steps:
+
+  create [--size SIZE]            Create a VM (small, large, xl or xxl; default
+                                  large), clone this repository's remote, start
+                                  Orca's server and print Orca's pairing
+  suspend                         Stop the workspace's VM; its files are kept
+  resume                          Start it again and print a fresh pairing
+  destroy                         Delete the workspace's VM
+  keep-open                       Keep every awake Orca VM's link open another
+                                  hour (the plugin runs it every 20 minutes)
+
+Environment:
+
+  BOXCOMPUTE_ORCA_SIZE            Overrides --size: small, large, xl or xxl
+                                  (xl and xxl come with Starter)
+  BOXCOMPUTE_ORCA_WORKSPACE       BoxCompute workspace ID (default: your first)
+  GH_TOKEN, GITHUB_TOKEN          Clones a private GitHub repository; without
+                                  them, \`gh auth token\` is tried. Used for the
+                                  clone and fetch only, then removed from the VM
+
+  A running VM bills your BoxCompute credit by the minute. While Orca is open,
+  its awake workspaces' VMs keep running; after Orca quits they stop as idle
+  within about half an hour, keeping their files.
+`;
+
+async function readAll(stream: Readable): Promise<string> {
+  if ((stream as { isTTY?: boolean }).isTTY) return "";
+  const chunks: Buffer[] = [];
+  let length = 0;
+  for await (const chunk of stream) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+    length += buffer.length;
+    if (length > 1_048_576) throw new Error("Orca's lifecycle payload is larger than 1 MiB");
+    chunks.push(buffer);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
 type Io = { stdin?: Readable; stdout: Writable; stderr: Writable };
 type DeviceAuthorization = {
   deviceCode: string;
@@ -428,6 +475,7 @@ export type CliDependencies = {
   proxy?: typeof runProxy;
   ssh?: typeof runSsh;
   runner?: typeof runRunner;
+  runLocal?: typeof runLocal;
   /** null simulates a runtime without a global WebSocket (Node.js 20). */
   webSocket?: typeof WebSocket | null;
 };
@@ -1192,6 +1240,32 @@ export async function runCli(argv: string[], supplied: CliDependencies = {}): Pr
     }
   }
 
+  if (command === "orca") {
+    const action = args.shift();
+    if (!action) {
+      write(io.stdout, orcaHelp);
+      return 0;
+    }
+    const connection = await load(env);
+    try {
+      return await runOrca(action, args, {
+        client: createClient(connection, fetchImpl),
+        connection,
+        fetch: fetchImpl,
+        env,
+        stdout: io.stdout,
+        stderr: io.stderr,
+        readStdin: () => readAll(io.stdin ?? process.stdin),
+        sleep,
+        now,
+        run: supplied.runLocal ?? runLocal,
+      }, json);
+    } catch (error) {
+      if (error instanceof OrcaUsageError) throw new UsageError(error.message);
+      throw error;
+    }
+  }
+
   if (command === "sandbox" && !args.length) {
     write(io.stdout, sandboxHelp);
     return 0;
@@ -1493,6 +1567,7 @@ function helpFor(command?: string): string {
   if (command === "costs") return costsHelp;
   if (command === "audit") return auditHelp;
   if (command === "runner") return runnerHelp;
+  if (command === "orca") return orcaHelp;
   return rootHelp;
 }
 
