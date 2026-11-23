@@ -3,6 +3,37 @@
 This file records user-visible changes to the BoxCompute CLI. GitHub Releases
 use the same notes and bind them to the exact source commit.
 
+## [0.14.0] - 2026-11-23
+
+Orca (orca.dev) can run each workspace on its own BoxCompute VM.
+
+### CLI users
+
+- New `bxc orca create|suspend|resume|destroy|keep-open`: the lifecycle steps
+  of the BoxCompute plugin's Orca VM recipe. Orca runs them in your
+  repository. `create` starts a Large VM (`--size` or `BOXCOMPUTE_ORCA_SIZE`
+  picks another), installs Orca's server build after checking it against its
+  release checksums, clones the repository's remote and starts
+  `orca-ide serve` on the VM's loopback, reached through a BoxCompute preview.
+  Claude Code and Codex install in the background from their vendors'
+  installers. `keep-open`, which the plugin runs every 20 minutes while Orca
+  is open, keeps each awake workspace's link and VM up; it needs BoxCompute
+  0.272.0.
+- A running VM bills your credit by the minute. After Orca quits, its VMs
+  stop as idle within about half an hour and keep their files.
+- Update with `bxc update` or `npm install --global @boxcompute/cli@latest`.
+  The Orca plugin pins this version through `npx`.
+
+### Security
+
+- A private GitHub repository is cloned with `GH_TOKEN`, `GITHUB_TOKEN` or
+  `gh auth token`. The token reaches the VM as a file, never in a command's
+  arguments or environment (which the VM's logs keep), and is deleted after
+  the clone or fetch. Orca's pairing code is read back as a file and deleted,
+  never printed by a command on the VM.
+- Each workspace's VM and preview IDs are kept in `orca/` beside the CLI's
+  credential, mode 0600; no credential is stored there.
+
 ## [0.13.0] - 2026-11-16
 
 The retired gVisor options are gone, and the CLI's own guide says where it
