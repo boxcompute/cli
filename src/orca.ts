@@ -375,9 +375,13 @@ node="$(ls -d "$B"/server/current/runtimes/node-*/bin/node 2>/dev/null | head -n
 [ -x "$node" ] || node="$(command -v node)"
 ready() { "$O" status --json 2>/dev/null | "$node" -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.exit(JSON.parse(s).result?.runtime?.state==="ready"?0:1)}catch{process.exit(1)}})'; }
 if ready; then
-  # Still serving (the VM kept running while its link changed): pair with the new link.
-  "$O" pair --address "$BXC_ORCA_ADDRESS" --json | "$node" -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const r=JSON.parse(s).result;if(!r?.pairingUrl)process.exit(1);process.stdout.write(JSON.stringify({schemaVersion:1,pairingCode:r.pairingUrl,projectRoot:process.env.BXC_ORCA_ROOT}))})' > "$out"
-  exit 0
+  # Still serving (the VM kept running while its link changed). orca-ide pair
+  # would re-expose a loopback-bound server to the network and refuses
+  # (network_exposure_failed), so restart it with the new link instead. Its
+  # terminals and agents run in a separate host that outlives the server.
+  pid="$("$O" status --json 2>/dev/null | "$node" -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const p=JSON.parse(s).result?.app?.pid;if(Number.isInteger(p))process.stdout.write(String(p))}catch{}})')"
+  [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
+  for _ in $(seq 1 40); do ready || break; sleep 0.5; done
 fi
 # The launcher prints the result and exits; the server it started keeps running.
 setsid nohup "$O" serve --port 6768 --bind 127.0.0.1 --project-root "$BXC_ORCA_ROOT" --pairing-address "$BXC_ORCA_ADDRESS" --recipe-json > "$out" 2> "$B/serve.log" < /dev/null &

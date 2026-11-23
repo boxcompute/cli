@@ -267,6 +267,13 @@ test("destroy deletes the recorded VM, finds one by name, and is fine with none"
   expect(await destroy(JSON.stringify({ mode: "destroy", instanceId, recipeResult: { userData: { sandboxId: "sbx_gone" } } }), gone.client)).toBe(0);
 });
 
+test("the server listens only on loopback and is restarted, never re-exposed, for a new link", () => {
+  expect(SERVE_SCRIPT).toContain("--bind 127.0.0.1");
+  // orca-ide pair re-exposes a loopback server to the network and refuses.
+  expect(SERVE_SCRIPT).not.toMatch(/"\$O" pair/);
+  expect(SETUP_SCRIPT).toContain("sha256sum");
+});
+
 test("remotes, names and versions", () => {
   expect(httpsRemote("git@github.com:acme/widget.git")).toBe("https://github.com/acme/widget.git");
   expect(httpsRemote("ssh://git@github.com/acme/widget.git")).toBe("https://github.com/acme/widget.git");

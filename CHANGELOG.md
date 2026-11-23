@@ -3,6 +3,25 @@
 This file records user-visible changes to the BoxCompute CLI. GitHub Releases
 use the same notes and bind them to the exact source commit.
 
+## [0.14.1] - 2026-11-23
+
+Waking an Orca workspace whose VM kept running works.
+
+### CLI users
+
+- `bxc orca resume` on a VM that is still running (Orca lost contact because
+  its link changed, not because the VM stopped) failed without a message:
+  re-pairing a server that listens only on the VM's loopback is refused. It
+  now restarts Orca's server with the new link; its terminals and agents keep
+  running.
+- Includes 0.14.0, which was never published to npm: `bxc orca` for the
+  BoxCompute plugin for Orca.
+- Update with `bxc update` or `npm install --global @boxcompute/cli@latest`.
+
+### Security
+
+- No change to authentication or credential storage.
+
 ## [0.14.0] - 2026-11-23
 
 Orca (orca.dev) can run each workspace on its own BoxCompute VM.
