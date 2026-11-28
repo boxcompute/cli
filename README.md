@@ -390,7 +390,12 @@ use semantic `vMAJOR.MINOR.PATCH` tags and are published from `main` by the
 protected `Publish BoxCompute CLI` workflow. npm trusted publishing supplies a
 short-lived release credential; the repository stores no npm token.
 
+## Contributing
+
+Bug reports, fixes and new commands are welcome. Read
+[CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request, and report
+vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
+
 ## License
 
-Copyright © 2026 BoxCompute. All rights reserved. The source is publicly
-visible, but it is not offered under an open-source license.
+[MIT](LICENSE). Copyright © 2026 BoxCompute.

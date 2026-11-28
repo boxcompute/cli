@@ -1,6 +1,6 @@
 {
   "name": "@boxcompute/cli",
-  "version": "0.14.1",
+  "version": "0.14.2",
   "description": "Connect local AI agents to BoxCompute sandboxes",
   "keywords": [
     "boxcompute",
@@ -16,7 +16,7 @@
   "bugs": {
     "url": "https://github.com/boxcompute/cli/issues"
   },
-  "license": "UNLICENSED",
+  "license": "MIT",
   "type": "module",
   "bin": {
     "bxc": "dist/cli.js",
