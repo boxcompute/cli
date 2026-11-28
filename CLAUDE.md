@@ -57,5 +57,7 @@ Release tags are `vMAJOR.MINOR.PATCH`. Notes follow the Sandbox convention: a
 short outcome, explicit user action, security impact, and the exact source
 commit. GitHub Releases and `CHANGELOG.md` are the public release record.
 
-The source is publicly visible but proprietary. Do not replace `UNLICENSED` or
-add an open-source license without owner approval.
+The CLI is MIT-licensed and accepts outside contributions (`CONTRIBUTING.md`).
+A contributor's pull request runs CI without repository secrets; never add a
+`pull_request_target` workflow or give fork pull requests a write token, the
+`npm` environment, or BoxCompute credentials.

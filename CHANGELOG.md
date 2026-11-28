@@ -3,6 +3,23 @@
 This file records user-visible changes to the BoxCompute CLI. GitHub Releases
 use the same notes and bind them to the exact source commit.
 
+## [0.14.2] - 2026-11-28
+
+The CLI is open source under the MIT license.
+
+### CLI users
+
+- `@boxcompute/cli` is now MIT-licensed, from this version on. Earlier
+  versions on npm keep their original terms.
+- Outside contributions are welcome: see `CONTRIBUTING.md` in
+  [boxcompute/cli](https://github.com/boxcompute/cli).
+- No change to commands or behaviour. Update with `bxc update` or
+  `npm install --global @boxcompute/cli@latest`.
+
+### Security
+
+- No change to authentication or credential storage.
+
 ## [0.14.1] - 2026-11-23
 
 Waking an Orca workspace whose VM kept running works.
